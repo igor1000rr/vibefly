@@ -51,3 +51,15 @@ data class CommandResultDto(
 data class ErrorDto(
     val error: String,
 )
+
+/**
+ * Запись лога. Зеркальный type для apps/agent/internal/logs.Entry.
+ */
+@Serializable
+data class LogEntryDto(
+    val time: String,
+    val app: String,
+    val level: String,
+    val source: String,
+    val message: String,
+)
