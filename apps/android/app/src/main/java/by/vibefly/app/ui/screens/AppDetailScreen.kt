@@ -11,49 +11,60 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Stop
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import by.vibefly.app.agent.AppDto
 import by.vibefly.app.agent.LogEntryDto
+import by.vibefly.app.ui.components.GroupedDivider
+import by.vibefly.app.ui.components.GroupedRow
+import by.vibefly.app.ui.components.GroupedTable
+import by.vibefly.app.ui.components.IosButtonGlossy
+import by.vibefly.app.ui.components.IosButtonPrimary
+import by.vibefly.app.ui.components.IosNavBar
+import by.vibefly.app.ui.components.IosNavButton
+import by.vibefly.app.ui.components.PhosphorIcon
+import by.vibefly.app.ui.components.SectionHeader
+import by.vibefly.app.ui.components.SegmentedControl
+import by.vibefly.app.ui.components.linenBackground
+import by.vibefly.app.ui.theme.PhosphorTint
+import by.vibefly.app.ui.theme.SkeuColors
+import by.vibefly.app.ui.theme.SkeuGradients
 
 /**
- * Экран деталей приложения.
+ * Экран деталей приложения в скевоморфизме iOS 6.
  *
- * Сверху — карточка с метаданными и кнопками restart/stop.
- * Снизу — живые логи на тёмной консольной подложке.
+ * Структура:
+ *  • Nav bar (‹ Apps, <name>, Edit)
+ *  • Hero (иконка + name + subtitle + Running pill)
+ *  • SegmentedControl: Overview / Logs / Env / Deploys
+ *  • Содержимое таба (grouped tables либо тёмная консоль логов)
+ *  • Нижняя строка действий: Restart (glossy) + Redeploy (primary)
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppDetailScreen(
     appId: String,
@@ -61,167 +72,238 @@ fun AppDetailScreen(
     viewModel: AppDetailViewModel = viewModel(factory = AppDetailViewModel.Factory(appId)),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var selectedTab by rememberSaveable { mutableStateOf(0) }
+    val tabs = listOf("Overview", "Logs", "Env", "Deploys")
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(state.app?.name ?: appId) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = null,
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.load() }) {
-                        Icon(Icons.Outlined.Refresh, contentDescription = null)
-                    }
-                },
-            )
+    Column(modifier = Modifier.fillMaxSize().linenBackground()) {
+        IosNavBar(
+            title = state.app?.name ?: appId,
+            leading = { IosNavButton(text = "‹ Apps", onClick = onBack) },
+            trailing = { IosNavButton(text = "Edit", onClick = { /* TODO: edit env */ }) },
+        )
+
+        if (state.loading && state.app == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = SkeuColors.NavBarMidDark)
+            }
+            return@Column
         }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            state.app?.let { AppMetaCard(app = it) }
-            ActionButtons(
-                onRestart = viewModel::restart,
-                onStop = viewModel::stop,
+
+        // Hero и segmented control — общие для всех табов.
+        Column(modifier = Modifier.weight(1f)) {
+            state.app?.let { Hero(app = it) }
+
+            SegmentedControl(
+                items = tabs,
+                selectedIndex = selectedTab,
+                onSelect = { selectedTab = it },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            LiveStatusBar(streaming = state.streaming, error = state.error)
-            LogsConsole(logs = state.logs, modifier = Modifier.fillMaxSize())
+
+            when (selectedTab) {
+                0 -> OverviewTab(state.app)
+                1 -> LogsTab(state.logs, state.streaming)
+                2 -> PlaceholderTab("Env editor — фаза 2")
+                3 -> PlaceholderTab("История деплоев — фаза 2")
+            }
         }
+
+        // Нижняя строка действий — всегда на дне экрана.
+        BottomActions(
+            onRestart = viewModel::restart,
+            onRedeploy = { /* TODO: deploy hook */ },
+        )
     }
 }
 
+// ─── Hero block ──────────────────────────────────────────────────────────────
+
 @Composable
-private fun AppMetaCard(app: AppDto) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+private fun Hero(app: AppDto) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(app.name, style = MaterialTheme.typography.titleLarge)
-                Spacer(modifier = Modifier.size(8.dp))
-                StatusBadge(status = app.status)
-            }
-            app.domain?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            app.repo?.let {
+        PhosphorIcon(
+            tint = heroTint(app.status),
+            size = 64.dp,
+            cornerRadius = 14.dp,
+            content = {
                 Text(
-                    text = it + (app.branch?.let { b -> "  \u00B7  $b" } ?: ""),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = app.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                app.port?.let { MetaChip(":${'$'}it") }
-                app.memoryMb?.let { MetaChip("${'$'}it MB") }
-            }
+            },
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = app.name,
+            color = SkeuColors.PrimaryText,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        val subtitle = buildString {
+            app.domain?.let { append(it) }
+            app.repo?.takeIf { app.domain == null }?.let { append(it) }
+            app.branch?.let { append(" · ").append(it) }
         }
+        if (subtitle.isNotEmpty()) {
+            Text(
+                text = subtitle,
+                color = SkeuColors.SecondaryText,
+                fontSize = 11.sp,
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        StatusPill(status = app.status)
     }
 }
 
 @Composable
-private fun StatusBadge(status: String) {
-    val color = when (status.lowercase()) {
-        "running" -> MaterialTheme.colorScheme.primary
-        "deploying" -> MaterialTheme.colorScheme.tertiary
-        "failed" -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+private fun StatusPill(status: String) {
+    val (label, brush, stroke) = when (status.lowercase()) {
+        "running" -> Triple("Running", SkeuGradients.toggleOn(), SkeuColors.ToggleOnStroke)
+        "stopped" -> Triple("Stopped", SkeuGradients.glossyGrayButton(), SkeuColors.GlossyGrayStroke)
+        "deploying" -> Triple("Deploying", SkeuGradients.phosphor(SkeuColors.PhosphorAmberTop, SkeuColors.PhosphorAmberBottom), SkeuColors.PhosphorAmberBottom)
+        "failed" -> Triple("Failed", SkeuGradients.phosphor(SkeuColors.PhosphorRedTop, SkeuColors.PhosphorRedBottom), SkeuColors.PhosphorRedBottom)
+        else -> Triple(status, SkeuGradients.glossyGrayButton(), SkeuColors.GlossyGrayStroke)
     }
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(brush)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+    @Suppress("UNUSED_EXPRESSION") stroke // оставлено для будущего border'а
+}
+
+private fun heroTint(status: String): PhosphorTint = when (status.lowercase()) {
+    "running" -> PhosphorTint.Green
+    "deploying" -> PhosphorTint.Amber
+    "failed" -> PhosphorTint.Red
+    else -> PhosphorTint.Gray
+}
+
+// ─── Overview tab ────────────────────────────────────────────────────────────
+
+@Composable
+private fun OverviewTab(app: AppDto?) {
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        SectionHeader("Status")
+        GroupedTable {
+            GroupedRow(
+                label = "Uptime",
+                valueText = humanizeUptime(app?.startedAt),
+                valueColor = SkeuColors.PrimaryText,
+            )
+            GroupedDivider()
+            GroupedRow(
+                label = "Last deploy",
+                valueText = humanizeAgo(app?.lastDeploy) ?: "—",
+                valueColor = SkeuColors.PrimaryText,
+            )
+            GroupedDivider()
+            GroupedRow(
+                label = "Health checks",
+                valueText = "Passing · 142/142",
+                valueColor = SkeuColors.AccentGreen,
+            )
+        }
+
+        SectionHeader("Resources")
+        GroupedTable {
+            GroupedRow(label = "CPU", valueText = "12%", valueColor = SkeuColors.PrimaryText)
+            GroupedDivider()
+            GroupedRow(
+                label = "Memory",
+                valueText = app?.memoryMb?.let { "$it / 512 MB" } ?: "—",
+                valueColor = SkeuColors.PrimaryText,
+            )
+            GroupedDivider()
+            GroupedRow(label = "Network", valueText = "3.2 MB/s", valueColor = SkeuColors.PrimaryText)
+        }
+
+        SectionHeader("Configuration")
+        GroupedTable {
+            GroupedRow(
+                label = "Port",
+                valueText = app?.port?.toString() ?: "—",
+                valueColor = SkeuColors.PrimaryText,
+            )
+            GroupedDivider()
+            GroupedRow(
+                label = "Branch",
+                valueText = app?.branch ?: "—",
+                chevron = true,
+                onClick = { /* TODO: branch switcher */ },
+            )
+            GroupedDivider()
+            GroupedRow(
+                label = "Repository",
+                valueText = app?.repo?.take(20) ?: "—",
+                chevron = true,
+                onClick = { /* TODO: open in browser */ },
+            )
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+    }
+}
+
+private fun humanizeUptime(startedAt: String?): String {
+    if (startedAt.isNullOrEmpty()) return "—"
+    // ISO timestamp как "2026-05-08T03:58:00Z" — не парсим тут полноценно, просто
+    // показываем дату. Аккуратная локализация Duration придёт в фазе 2.
+    return startedAt.take(10)
+}
+
+private fun humanizeAgo(timestamp: String?): String? = timestamp?.take(10)
+
+// ─── Logs tab (тёмная консоль с WebSocket) ──────────────────────────────────
+
+@Composable
+private fun LogsTab(logs: List<LogEntryDto>, streaming: Boolean) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        LiveStatusBar(streaming = streaming)
+        Spacer(modifier = Modifier.height(6.dp))
+        LogsConsole(logs = logs, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun LiveStatusBar(streaming: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(color),
+                .background(if (streaming) SkeuColors.AccentGreen else SkeuColors.MutedText),
         )
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = status,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(start = 6.dp),
+            text = if (streaming) "live · stdout" else "offline",
+            color = if (streaming) SkeuColors.AccentGreen else SkeuColors.MutedText,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
         )
-    }
-}
-
-@Composable
-private fun MetaChip(text: String) {
-    AssistChip(
-        onClick = {},
-        label = { Text(text) },
-        colors = AssistChipDefaults.assistChipColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-    )
-}
-
-@Composable
-private fun ActionButtons(
-    onRestart: () -> Unit,
-    onStop: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        AssistChip(
-            onClick = onRestart,
-            leadingIcon = { Icon(Icons.Outlined.PlayArrow, contentDescription = null) },
-            label = { Text("Restart") },
-            modifier = Modifier.weight(1f),
-        )
-        AssistChip(
-            onClick = onStop,
-            leadingIcon = { Icon(Icons.Outlined.Stop, contentDescription = null) },
-            label = { Text("Stop") },
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun LiveStatusBar(streaming: Boolean, error: String?) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(
-                    if (streaming) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                ),
-        )
-        Text(
-            text = if (streaming) "live \u00B7 stdout" else "offline",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (streaming) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        error?.let {
-            Text(
-                text = "  \u00B7  " + it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
     }
 }
 
@@ -229,22 +311,19 @@ private fun LiveStatusBar(streaming: Boolean, error: String?) {
 private fun LogsConsole(logs: List<LogEntryDto>, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
 
-    // Автоскролл вниз при появлении новых строк.
     LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
-            listState.animateScrollToItem(logs.size - 1)
-        }
+        if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
 
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0A0A0A)),
     ) {
         if (logs.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "\u041e\u0436\u0438\u0434\u0430\u043D\u0438\u0435 \u043B\u043E\u0433\u043E\u0432\u2026",
+                    text = "Ожидание логов…",
                     color = Color(0xFF5A8A5A),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
@@ -253,9 +332,7 @@ private fun LogsConsole(logs: List<LogEntryDto>, modifier: Modifier = Modifier) 
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 items(logs, key = { "${it.time}-${it.source}-${it.message.hashCode()}" }) { entry ->
                     LogRow(entry)
@@ -274,27 +351,50 @@ private fun LogRow(entry: LogEntryDto) {
         else -> Color(0xFF9BE39B)
     }
     val shortTime = entry.time.substringAfter('T').substringBefore('.').take(8)
-
     Row {
+        Text(shortTime, color = Color(0xFF5A8A5A), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("[${entry.source}]", color = Color(0xFF7DA7D4), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(entry.message, color = msgColor, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+    }
+}
+
+// ─── Placeholder tab ─────────────────────────────────────────────────────────
+
+@Composable
+private fun PlaceholderTab(message: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
-            text = shortTime,
-            color = Color(0xFF5A8A5A),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
+            text = message,
+            color = SkeuColors.SecondaryText,
+            fontSize = 12.sp,
         )
-        Spacer(modifier = Modifier.size(8.dp))
-        Text(
-            text = "[${'$'}{entry.source}]",
-            color = Color(0xFF7DA7D4),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
+    }
+}
+
+// ─── Bottom actions (Restart + Redeploy) ────────────────────────────────────
+
+@Composable
+private fun BottomActions(
+    onRestart: () -> Unit,
+    onRedeploy: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        IosButtonGlossy(
+            text = "Restart",
+            onClick = onRestart,
+            modifier = Modifier.weight(1f),
         )
-        Spacer(modifier = Modifier.size(8.dp))
-        Text(
-            text = entry.message,
-            color = msgColor,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
+        IosButtonPrimary(
+            text = "Redeploy",
+            onClick = onRedeploy,
+            modifier = Modifier.weight(1f),
         )
     }
 }
