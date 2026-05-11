@@ -3,7 +3,6 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -225,6 +224,3 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
-
-// errAppNotFound — обёртка для ясных логов.
-var errAppNotFound = errors.New("app not found")
