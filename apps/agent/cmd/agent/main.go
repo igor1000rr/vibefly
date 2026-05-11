@@ -17,9 +17,10 @@ import (
 	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/server"
+	"by.vibefly/agent/internal/supervisor"
 )
 
-var Version = "0.0.2-dev"
+var Version = "0.0.3-dev"
 
 func main() {
 	var (
@@ -45,23 +46,31 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	logStreamer := logs.NewStreamer(logger, 500)
-	appsStore := apps.NewStore(logger)
+	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir)
+	logger.Info("supervisor",
+		"available", sup.Available(),
+	)
 
-	// При отсутствии реальных логов (фаза 1) — фейк-генератор для UI.
-	appIDs := make([]string, 0, len(appsStore.List()))
-	for _, a := range appsStore.List() {
-		appIDs = append(appIDs, a.ID)
+	logStreamer := logs.NewStreamer(logger, 500)
+	appsStore := apps.NewStore(logger, sup)
+
+	// Если реальный supervisor недоступен — гоним фейк-логи для UI-разработки.
+	if !sup.Available() {
+		appIDs := make([]string, 0, len(appsStore.List()))
+		for _, a := range appsStore.List() {
+			appIDs = append(appIDs, a.ID)
+		}
+		logStreamer.StartFakeGenerator(ctx, appIDs)
 	}
-	logStreamer.StartFakeGenerator(ctx, appIDs)
 
 	deps := server.Dependencies{
-		Logger:  logger,
-		Version: Version,
-		Metrics: metrics.New(),
-		Apps:    appsStore,
-		Logs:    logStreamer,
-		Token:   cfg.AuthToken,
+		Logger:     logger,
+		Version:    Version,
+		Metrics:    metrics.New(),
+		Apps:       appsStore,
+		Logs:       logStreamer,
+		Supervisor: sup,
+		Token:      cfg.AuthToken,
 	}
 
 	srv := &http.Server{
