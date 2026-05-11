@@ -3,6 +3,7 @@ package by.vibefly.app.ui.screens
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import by.vibefly.app.data.AppItem
+import by.vibefly.app.data.AppStatus
 import by.vibefly.app.data.AppsRepository
 import by.vibefly.app.data.ServiceLocator
 import by.vibefly.app.data.SystemRepository
@@ -56,6 +57,20 @@ class DashboardViewModel(
     fun restart(id: String) {
         viewModelScope.launch {
             runCatching { apps.restart(id) }
+            refresh()
+        }
+    }
+
+    /**
+     * Один-тап toggle на дашборде: если приложение running — стоп, иначе старт.
+     * Затем рефреш состояния.
+     */
+    fun toggle(item: AppItem) {
+        viewModelScope.launch {
+            runCatching {
+                if (item.status == AppStatus.Running) apps.stop(item.id)
+                else apps.start(item.id)
+            }
             refresh()
         }
     }
