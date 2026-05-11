@@ -1,227 +1,284 @@
 package by.vibefly.app.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import by.vibefly.app.R
 import by.vibefly.app.agent.SystemMetricsDto
 import by.vibefly.app.data.AppItem
 import by.vibefly.app.data.AppStatus
+import by.vibefly.app.ui.components.GroupedDivider
+import by.vibefly.app.ui.components.GroupedRow
+import by.vibefly.app.ui.components.GroupedTable
+import by.vibefly.app.ui.components.IosNavBar
+import by.vibefly.app.ui.components.IosNavButton
+import by.vibefly.app.ui.components.IosToggle
+import by.vibefly.app.ui.components.PhosphorIcon
+import by.vibefly.app.ui.components.SectionHeader
+import by.vibefly.app.ui.components.linenBackground
+import by.vibefly.app.ui.theme.PhosphorTint
+import by.vibefly.app.ui.theme.SkeuColors
 
 /**
- * Главный экран — состояние устройства + список приложений.
+ * Главный экран VibeFly — Device Health + список приложений в стиле iOS 6.
+ *
+ *  • IosNavBar сверху ("VibeFly" + кнопка "+ Deploy")
+ *  • Grouped table с 4 метриками устройства
+ *  • Grouped table с приложениями, у каждого IosToggle для старт/стоп
+ *
+ * TabBar рисуется NavHost'ом снаружи, не здесь.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     onAppClick: (String) -> Unit,
+    onDeployClick: () -> Unit,
     viewModel: DashboardViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.dashboard_title)) })
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { HealthCard(metrics = state.metrics) }
-            if (state.error != null) {
-                item { ErrorCard(text = state.error.orEmpty()) }
-            }
-            item {
-                Text(
-                    text = stringResource(R.string.dashboard_apps_section),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-            if (state.apps.isEmpty() && state.error == null) {
-                item {
-                    Text(
-                        text = stringResource(R.string.dashboard_empty_apps),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            items(state.apps, key = { it.id }) { app ->
-                AppRow(item = app, onClick = { onAppClick(app.id) })
-            }
-        }
-    }
-}
-
-@Composable
-private fun HealthCard(metrics: SystemMetricsDto?) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Device health",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                HealthMetric(
-                    stringResource(R.string.dashboard_health_battery),
-                    metrics?.let { "${it.batteryLevel}%" } ?: "\u2014",
-                )
-                HealthMetric(
-                    stringResource(R.string.dashboard_health_temp),
-                    metrics?.let { "%.0f\u00B0C".format(it.temperatureC) } ?: "\u2014",
-                )
-                HealthMetric(
-                    stringResource(R.string.dashboard_health_cpu),
-                    metrics?.let { "%.0f%%".format(it.cpuPercent) } ?: "\u2014",
-                )
-                HealthMetric(
-                    stringResource(R.string.dashboard_health_ram),
-                    metrics?.let {
-                        "%.1fG".format(it.ramUsedMb / 1024.0)
-                    } ?: "\u2014",
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HealthMetric(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+    Column(modifier = Modifier.fillMaxSize().linenBackground()) {
+        IosNavBar(
+            title = "VibeFly",
+            trailing = {
+                IosNavButton(text = "+ Deploy", onClick = onDeployClick)
+            },
         )
+        when {
+            state.loading && state.apps.isEmpty() -> LoadingPlaceholder()
+            state.error != null && state.apps.isEmpty() -> ErrorPlaceholder(state.error!!)
+            else -> DashboardContent(
+                metrics = state.metrics,
+                apps = state.apps,
+                onAppClick = onAppClick,
+                onToggle = viewModel::toggle,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingPlaceholder() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = SkeuColors.NavBarMidDark)
+    }
+}
+
+@Composable
+private fun ErrorPlaceholder(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Агент недоступен",
+                color = SkeuColors.PrimaryText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = message,
+                color = SkeuColors.SecondaryText,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardContent(
+    metrics: SystemMetricsDto?,
+    apps: List<AppItem>,
+    onAppClick: (String) -> Unit,
+    onToggle: (AppItem) -> Unit,
+) {
+    val scroll = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll),
+    ) {
+        SectionHeader("Device health")
+        DeviceHealthTable(metrics)
+
+        SectionHeader("Apps · ${apps.size}")
+        AppsTable(apps = apps, onAppClick = onAppClick, onToggle = onToggle)
+
         Text(
-            text = value,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            text = "Toggle to start or stop apps. Tap a row for logs and details.",
+            color = SkeuColors.SecondaryText,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
         )
     }
 }
 
+// ─── Device Health ───────────────────────────────────────────────────────────
+
 @Composable
-private fun ErrorCard(text: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = "\u0410\u0433\u0435\u043D\u0442 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+private fun DeviceHealthTable(metrics: SystemMetricsDto?) {
+    GroupedTable {
+        GroupedRow(
+            label = "Battery",
+            valueText = metrics?.let { "${it.batteryLevel}%" } ?: "—",
+            valueColor = SkeuColors.LinkBlue,
+        )
+        GroupedDivider()
+        GroupedRow(
+            label = "Temperature",
+            valueText = metrics?.let { "${it.temperatureC.toInt()}°C" } ?: "—",
+            valueColor = SkeuColors.PrimaryText,
+        )
+        GroupedDivider()
+        GroupedRow(
+            label = "CPU",
+            valueText = metrics?.let { "${it.cpuPercent.toInt()}%" } ?: "—",
+            valueColor = SkeuColors.PrimaryText,
+        )
+        GroupedDivider()
+        GroupedRow(
+            label = "RAM",
+            valueText = metrics?.let {
+                val usedGb = it.ramUsedMb / 1024.0
+                val totalGb = it.ramTotalMb / 1024
+                "%.1f / %d GB".format(usedGb, totalGb)
+            } ?: "—",
+            valueColor = SkeuColors.PrimaryText,
+        )
+    }
+}
+
+// ─── Apps list ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun AppsTable(
+    apps: List<AppItem>,
+    onAppClick: (String) -> Unit,
+    onToggle: (AppItem) -> Unit,
+) {
+    GroupedTable {
+        apps.forEachIndexed { index, app ->
+            AppListRow(
+                app = app,
+                onClick = { onAppClick(app.id) },
+                onToggle = { onToggle(app) },
             )
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
-            )
+            if (index < apps.lastIndex) GroupedDivider()
         }
     }
 }
 
+/**
+ * Кастомная двух-строчная строка для приложения. GroupedRow рисует только одну
+ * строку, поэтому здесь дублируем его layout с поправкой на subtitle.
+ */
 @Composable
-private fun AppRow(item: AppItem, onClick: () -> Unit) {
-    Card(
+private fun AppListRow(
+    app: AppItem,
+    onClick: () -> Unit,
+    onToggle: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+            .defaultMinSize(minHeight = 50.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        AppAvatar(name = app.name, status = app.status)
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(item.name, style = MaterialTheme.typography.titleLarge)
-                Text(
-                    item.subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            StatusChip(status = item.status)
+            Text(
+                text = app.name,
+                color = SkeuColors.PrimaryText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = app.subtitle + (app.memoryMb?.let { " · $it MB" } ?: ""),
+                color = subtitleColor(app.status),
+                fontSize = 11.sp,
+            )
         }
-        HorizontalDivider(
-            modifier = Modifier.padding(horizontal = 14.dp),
-            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+        Spacer(modifier = Modifier.width(8.dp))
+        IosToggle(
+            checked = app.status == AppStatus.Running,
+            onCheckedChange = { onToggle() },
         )
     }
 }
 
+private fun subtitleColor(status: AppStatus): Color = when (status) {
+    AppStatus.Deploying -> SkeuColors.AccentOrange
+    AppStatus.Failed -> SkeuColors.AccentRed
+    else -> SkeuColors.MutedText
+}
+
 @Composable
-private fun StatusChip(status: AppStatus) {
-    val (text, color) = when (status) {
-        AppStatus.Running -> stringResource(R.string.status_running) to MaterialTheme.colorScheme.primary
-        AppStatus.Deploying -> stringResource(R.string.status_deploying) to MaterialTheme.colorScheme.tertiary
-        AppStatus.Stopped -> stringResource(R.string.status_stopped) to MaterialTheme.colorScheme.onSurfaceVariant
-        AppStatus.Failed -> stringResource(R.string.status_error) to MaterialTheme.colorScheme.error
-        AppStatus.Unknown -> "\u2014" to MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(color),
-        )
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(start = 6.dp),
-        )
+private fun AppAvatar(name: String, status: AppStatus) {
+    val letter = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    val tint = avatarTint(letter, status)
+    PhosphorIcon(
+        tint = tint,
+        size = 32.dp,
+        cornerRadius = 7.dp,
+        content = {
+            Text(
+                text = letter,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+    )
+}
+
+/**
+ * Цвет аватарки определяется первой буквой имени + статусом.
+ */
+private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (status) {
+    AppStatus.Deploying -> PhosphorTint.Amber
+    AppStatus.Failed -> PhosphorTint.Red
+    AppStatus.Stopped, AppStatus.Unknown -> PhosphorTint.Gray
+    AppStatus.Running -> when ((letter.firstOrNull()?.code ?: 0) % 4) {
+        0 -> PhosphorTint.Green
+        1 -> PhosphorTint.Blue
+        2 -> PhosphorTint.Violet
+        else -> PhosphorTint.Orange
     }
 }
