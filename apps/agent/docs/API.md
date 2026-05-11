@@ -4,19 +4,22 @@
 
 Авторизация — `Authorization: Bearer <token>`. Токен генерируется Android-приложением при первом запуске и прописывается в `/etc/vibefly/agent.toml`. При пустом токене в конфиге авторизация отключена (режим разработки).
 
-## v0.2 — текущие эндпоинты
+## v0.3 — текущие эндпоинты
 
 ### `GET /health`
 
-Открытая ручка. Работоспособность агента.
+Открытая ручка. Работоспособность агента + флаг доступности supervisor'а.
 
 ```json
 {
   "status": "ok",
-  "version": "0.0.2-dev",
-  "time": "2026-05-11T18:00:00Z"
+  "version": "0.0.3-dev",
+  "time": "2026-05-11T18:00:00Z",
+  "supervisor_available": true
 }
 ```
+
+`supervisor_available: true` означает, что агент запущен на Linux с systemd и может реально управлять приложениями. `false` — demo-режим с фейк-данными.
 
 ### `GET /system`
 
@@ -37,44 +40,41 @@
 
 ### `GET /apps`
 
-Список приложений.
-
-```json
-[
-  {
-    "id": "amina-bot",
-    "name": "amina-bot",
-    "status": "running",
-    "repo": "antsincgame/Amina-bot",
-    "branch": "main",
-    "port": 3001,
-    "domain": "@AIAMINABOT",
-    "memory_mb": 124,
-    "started_at": "2026-05-08T03:58:00Z",
-    "last_deploy": "2026-05-11T16:00:00Z"
-  }
-]
-```
+Список приложений. При доступном supervisor'е статусы синхронизированы с systemd.
 
 ### `GET /apps/{id}`
 
-Детали одного приложения. 404 если нет.
+Детали одного приложения.
 
-### `POST /apps/{id}/restart`
+### `POST /apps`
 
-Переводит приложение в `running`. В v0.2 это имитация; в v0.3 будет `systemctl restart vibefly-app-<id>`.
+Регистрирует новое приложение и устанавливает его как systemd unit.
 
 ```json
-{ "status": "restarted", "id": "amina-bot" }
+{
+  "id": "my-bot",
+  "name": "My Bot",
+  "start_cmd": "node index.js",
+  "env": { "BOT_TOKEN": "..." },
+  "memory_max": "512M",
+  "port": 5000,
+  "domain": "bot.example.com"
+}
 ```
 
-### `POST /apps/{id}/stop`
+Обязательные поля: `id` (slug `[a-zA-Z0-9_-]{1,64}`), `start_cmd`.
 
-Переводит приложение в `stopped`.
+### `DELETE /apps/{id}`
+
+Останавливает, делает `systemctl disable` и удаляет unit-файл.
+
+### `POST /apps/{id}/start`, `POST /apps/{id}/restart`, `POST /apps/{id}/stop`
+
+Управление состоянием приложения через `systemctl`.
 
 ### `GET /apps/{id}/logs?lines=N`
 
-Последние N записей лога (по умолчанию 100). Каждая запись:
+Последние N записей лога (по умолчанию 100). Запись:
 
 ```json
 {
@@ -88,23 +88,68 @@
 
 ### `WS /apps/{id}/logs/stream`
 
-WebSocket-стрим логов. Сначала отдаётся backlog последних 100 записей, дальше — лайв-поток новых записей.
+WebSocket-стрим логов. Сначала отдаётся backlog последних 100 записей.
 
-В фазе 1 источник — внутренний fake-генератор. В фазе 2 заменится на journald-вывод через `journalctl -fu vibefly-app-<id>`.
+Дальше:
 
-## v0.3 — план
+- если supervisor доступен — лайв `journalctl -fu vibefly-app-<id>` с автоклассификацией level по содержимому строки;
+- если supervisor — `NopSupervisor` (например, macOS-десктоп) — fallback на in-memory pub/sub с фейк-генератором.
+
+## Marketplace v0.1
+
+### `GET /marketplace`
+
+Список встроенных one-click шаблонов.
+
+```json
+[
+  {
+    "id": "vaultwarden",
+    "name": "Vaultwarden",
+    "category": "privacy",
+    "icon": "🔐",
+    "description": "Менеджер паролей с поддержкой Bitwarden API.",
+    "image": "vaultwarden/server:latest",
+    "start_cmd": "vaultwarden",
+    "default_port": 8080,
+    "memory_max": "256M",
+    "env_schema": [
+      { "key": "ADMIN_TOKEN", "label": "Admin token", "secret": true, "required": true }
+    ],
+    "tags": ["password-manager", "selfhosted"]
+  }
+]
+```
+
+### `GET /marketplace/{id}`
+
+Детали одного шаблона. 404 если нет.
+
+### `POST /marketplace/{id}/install`
+
+One-click install. Параметры тела опциональные — без них приложение установится с дефолтами шаблона.
+
+```json
+{
+  "app_id": "my-vault",
+  "domain": "vault.example.com",
+  "port": 8080,
+  "env": { "ADMIN_TOKEN": "secret" }
+}
+```
+
+После успешного install приложение появится в `GET /apps` со статусом `stopped`. Запустить нужно вручную через `POST /apps/{id}/start`.
+
+## v0.4 — план
 
 ```
-POST   /apps                              — создать из git URL
-DELETE /apps/{id}                         — удалить
-POST   /apps/{id}/start                   — start
 POST   /apps/{id}/deploy                  — git pull + build + reload
 GET    /apps/{id}/env                     — read env (с маскированием)
 PUT    /apps/{id}/env                     — update env
 WS     /system/stream                     — лайв-метрики
 ```
 
-## v0.4–0.5 — AI tools
+## v0.5 — AI tools
 
 ```
 POST /ai/tools/{name}        — выполнить tool
