@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -23,7 +22,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,15 +46,10 @@ import kotlinx.coroutines.launch
 /**
  * Настройки в скевоморфизме iOS 6.
  *
- * Реально функциональные строки:
- *  • Agent URL (Cloudflare phosphor) → edit dialog
- *  • Auth token (Blue phosphor) → edit dialog
- *  • Provider (Violet phosphor) → picker dialog
- *
- * Декоративные/placeholder (живут в rememberSaveable, без backend):
- *  • Auto-mode, Throttle, Auto-restart on OOM, Daily backup, Battery limit
- *
- * Когда соответствующие фичи появятся в SettingsStore — связь поднимется без правок UI.
+ * Функциональные строки: Agent URL, Auth token, Provider.
+ * Placeholder строки в rememberSaveable (без backend): Auto-mode, Throttle,
+ * Auto-restart on OOM, Daily backup. Когда фичи появятся в SettingsStore —
+ * связь поднимется без правок UI.
  */
 @Composable
 fun SettingsScreen() {
@@ -95,7 +88,8 @@ fun SettingsScreen() {
                 GroupedRow(
                     label = "Auth token",
                     leading = { PhosphorIcon(tint = PhosphorTint.Blue, glyph = "●") },
-                    valueText = if (snapshot.authToken.isBlank()) "Not set" else "•••• " + snapshot.authToken.takeLast(4),
+                    valueText = if (snapshot.authToken.isBlank()) "Not set"
+                                else "•••• " + snapshot.authToken.takeLast(4),
                     chevron = true,
                     onClick = { showTokenDialog = true },
                 )
@@ -254,16 +248,14 @@ private fun EditTextDialog(
         },
         title = { Text(title) },
         text = {
-            Column {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    placeholder = { Text(placeholder) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                placeholder = { Text(placeholder) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                modifier = Modifier.fillMaxWidth(),
+            )
         },
     )
 }
@@ -282,46 +274,20 @@ private fun ProviderPickerDialog(
         },
         title = { Text("AI Provider") },
         text = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 SettingsStore.AiProvider.values().forEach { provider ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    val selected = provider == current
+                    TextButton(
+                        onClick = { onPick(provider) },
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = if (provider == current) "✓  ${provider.displayName}" else "    ${provider.displayName}",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(end = 8.dp),
-                            color = if (provider == current) SkeuColors.LinkBlue else SkeuColors.PrimaryText,
-                            fontWeight = if (provider == current) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                    androidx.compose.foundation.layout.Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(0.5.dp)
-                            .padding(start = 0.dp)
-                    )
-                    // Кликабельный обёрт ниже — Row уже на месте, делаем интерактивным целиком.
-                    Spacer(modifier = Modifier.width(0.dp))
-                }
-                // Простой набор кликабельных строк через отдельную колонку:
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    SettingsStore.AiProvider.values().forEach { provider ->
-                        TextButton(
-                            onClick = { onPick(provider) },
+                            text = (if (selected) "✓ " else "  ") + provider.displayName,
+                            color = if (selected) SkeuColors.LinkBlue else SkeuColors.PrimaryText,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                text = provider.displayName,
-                                color = if (provider == current) SkeuColors.LinkBlue else SkeuColors.PrimaryText,
-                                fontWeight = if (provider == current) FontWeight.SemiBold else FontWeight.Normal,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
+                        )
                     }
                 }
             }
