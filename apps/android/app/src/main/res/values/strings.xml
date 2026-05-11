@@ -1,0 +1,58 @@
+<resources>
+    <string name="app_name">VibeFly</string>
+
+    <!-- Notifications. -->
+    <string name="notification_channel_runtime_name">Runtime</string>
+    <string name="notification_channel_runtime_desc">Держит Linux-runtime и ваши приложения в живом состоянии</string>
+    <string name="notification_runtime_title">VibeFly работает</string>
+    <string name="notification_runtime_text">Сервер живёт в фоне. Приложения доступны.</string>
+
+    <!-- Navigation. -->
+    <string name="nav_dashboard">Дашборд</string>
+    <string name="nav_chat">AI</string>
+    <string name="nav_marketplace">Приложения</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Dashboard. -->
+    <string name="dashboard_title">VibeFly</string>
+    <string name="dashboard_health_battery">Батарея</string>
+    <string name="dashboard_health_temp">Температура</string>
+    <string name="dashboard_health_cpu">CPU</string>
+    <string name="dashboard_health_ram">RAM</string>
+    <string name="dashboard_apps_section">Приложения</string>
+    <string name="dashboard_empty_apps">Пока нет приложений. Разверните первое из git URL или выберите из маркетплейса.</string>
+    <string name="dashboard_deploy_button">Развернуть</string>
+
+    <!-- Status. -->
+    <string name="status_running">Работает</string>
+    <string name="status_stopped">Остановлено</string>
+    <string name="status_deploying">Развёртывание…</string>
+    <string name="status_error">Ошибка</string>
+
+    <!-- Chat. -->
+    <string name="chat_title">AI-ассистент</string>
+    <string name="chat_input_hint">Спросите ассистента…</string>
+    <string name="chat_send">Отправить</string>
+
+    <!-- Marketplace. -->
+    <string name="marketplace_title">Marketplace</string>
+    <string name="marketplace_search_hint">Найти приложение…</string>
+
+    <!-- Settings. -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_section_connections">Подключения</string>
+    <string name="settings_section_ai">AI-ассистент</string>
+    <string name="settings_section_device">Устройство</string>
+    <string name="settings_section_backups">Бэкапы</string>
+    <string name="settings_about">VibeFly %1$s</string>
+
+    <!-- Onboarding. -->
+    <string name="onboarding_welcome_title">Добро пожаловать в VibeFly</string>
+    <string name="onboarding_welcome_text">Сейчас мы проверим ваше устройство, скачаем Linux-образ и поднимем сервер. Займёт около 5 минут.</string>
+    <string name="onboarding_check_kernel">Проверяем ядро</string>
+    <string name="onboarding_check_root">Проверяем root</string>
+    <string name="onboarding_check_storage">Проверяем место</string>
+    <string name="onboarding_download_rootfs">Скачиваем Linux-образ</string>
+    <string name="onboarding_start_runtime">Запускаем runtime</string>
+    <string name="onboarding_done">Готово</string>
+</resources>
