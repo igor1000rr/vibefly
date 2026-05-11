@@ -1,7 +1,4 @@
 // Package main — точка входа агента VibeFly.
-//
-// Агент живёт внутри Debian rootfs и слушает на 127.0.0.1:3001.
-// Android-приложение общается с ним через эту локальную петлю.
 package main
 
 import (
@@ -17,12 +14,12 @@ import (
 
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/config"
+	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/server"
 )
 
-// Version подставляется через -ldflags на сборке.
-var Version = "0.0.1-dev"
+var Version = "0.0.2-dev"
 
 func main() {
 	var (
@@ -41,28 +38,37 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Warn("конфиг не найден, использую дефолты", "err", err, "path", *configPath)
+		logger.Warn("конфиг не найден, дефолты", "err", err)
 		cfg = config.Default()
 	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	logStreamer := logs.NewStreamer(logger, 500)
+	appsStore := apps.NewStore(logger)
+
+	// При отсутствии реальных логов (фаза 1) — фейк-генератор для UI.
+	appIDs := make([]string, 0, len(appsStore.List()))
+	for _, a := range appsStore.List() {
+		appIDs = append(appIDs, a.ID)
+	}
+	logStreamer.StartFakeGenerator(ctx, appIDs)
 
 	deps := server.Dependencies{
 		Logger:  logger,
 		Version: Version,
 		Metrics: metrics.New(),
-		Apps:    apps.NewStore(logger),
+		Apps:    appsStore,
+		Logs:    logStreamer,
 		Token:   cfg.AuthToken,
 	}
 
-	handler := server.NewRouter(deps)
-
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           handler,
+		Handler:           server.NewRouter(deps),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	go func() {
 		logger.Info("агент стартует", "listen", cfg.Listen, "version", Version)
@@ -73,13 +79,10 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("получен сигнал остановки, gracefull shutdown")
-
+	logger.Info("shutdown")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("ошибка при остановке сервера", "err", err)
+		logger.Error("ошибка shutdown", "err", err)
 	}
-	logger.Info("агент остановлен")
 }

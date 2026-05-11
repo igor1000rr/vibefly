@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"by.vibefly/agent/internal/apps"
+	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/metrics"
 )
 
@@ -19,7 +20,8 @@ func newTestDeps() Dependencies {
 		Version: "test",
 		Metrics: metrics.New(),
 		Apps:    apps.NewStore(logger),
-		Token:   "", // без авторизации для тестов
+		Logs:    logs.NewStreamer(logger, 100),
+		Token:   "",
 	}
 }
 
@@ -73,6 +75,32 @@ func TestRestartEndpoint(t *testing.T) {
 	}
 }
 
+func TestLogsRecentEndpoint(t *testing.T) {
+	deps := newTestDeps()
+	deps.Logs.Append(logs.Entry{App: "amina-bot", Level: logs.LevelInfo, Message: "hello"})
+	handler := NewRouter(deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/apps/amina-bot/logs?lines=10", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ожидался 200, получен %d", rec.Code)
+	}
+}
+
+func TestLogsRecentNotFound(t *testing.T) {
+	handler := NewRouter(newTestDeps())
+
+	req := httptest.NewRequest(http.MethodGet, "/apps/does-not-exist/logs", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("ожидался 404, получен %d", rec.Code)
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	deps := newTestDeps()
 	deps.Token = "secret"
@@ -86,7 +114,6 @@ func TestAuthRequired(t *testing.T) {
 		t.Fatalf("ожидался 401, получен %d", rec.Code)
 	}
 
-	// /health остаётся открытым.
 	req = httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -94,7 +121,6 @@ func TestAuthRequired(t *testing.T) {
 		t.Errorf("/health должен быть открытым, получен %d", rec.Code)
 	}
 
-	// С правильным токеном проходит.
 	req = httptest.NewRequest(http.MethodGet, "/apps", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = httptest.NewRecorder()
