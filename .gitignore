@@ -1,0 +1,93 @@
+# .gitignore — корневой
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Editors
+.idea/
+.vscode/
+*.iml
+.vs/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnp.*
+.yarn/cache
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.turbo/
+.cache/
+
+# Env
+.env
+.env.local
+.env.*.local
+*.env
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+bin/
+agent
+
+# Android / Kotlin / Gradle
+apps/android/build/
+apps/android/app/build/
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/captures/
+apps/android/.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+.idea/
+*.keystore
+
+# Rootfs builder artefacts
+runtime/rootfs-builder/work/
+runtime/rootfs-builder/output/
+runtime/rootfs-builder/*.img
+runtime/rootfs-builder/*.img.xz
+runtime/rootfs-builder/*.tar.gz
+
+# Droidspaces local
+runtime/droidspaces/local/
+
+# Cloud
+apps/cloud/.next/
+apps/cloud/.vercel/
+apps/cloud/coverage/
+
+# Secrets / keys
+secrets/
+*.pem
+*.key
+!*.example.key
+
+# Misc
+coverage/
+*.tsbuildinfo
+.eslintcache
