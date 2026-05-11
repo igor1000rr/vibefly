@@ -1,61 +1,89 @@
 package by.vibefly.app.ui.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
-private val LightColors = lightColorScheme(
-    primary = md_light_primary,
-    onPrimary = md_light_onPrimary,
-    primaryContainer = md_light_primaryContainer,
-    onPrimaryContainer = md_light_onPrimaryContainer,
-    background = md_light_background,
-    onBackground = md_light_onBackground,
-    surface = md_light_surface,
-    onSurface = md_light_onSurface,
-    surfaceVariant = md_light_surfaceVariant,
-    onSurfaceVariant = md_light_onSurfaceVariant,
-    outline = md_light_outline,
-)
-
-private val DarkColors = darkColorScheme(
-    primary = md_dark_primary,
-    onPrimary = md_dark_onPrimary,
-    primaryContainer = md_dark_primaryContainer,
-    onPrimaryContainer = md_dark_onPrimaryContainer,
-    background = md_dark_background,
-    onBackground = md_dark_onBackground,
-    surface = md_dark_surface,
-    onSurface = md_dark_onSurface,
-    surfaceVariant = md_dark_surfaceVariant,
-    onSurfaceVariant = md_dark_onSurfaceVariant,
-    outline = md_dark_outline,
-)
-
+/**
+ * Скевоморфная iOS 6 тема. Отбросил dynamic color и dark mode — этот язык
+ * живёт только в светлой версии, точно как iPhone до iOS 13.
+ *
+ * Material 3 colorScheme остаётся, но он вторичный — всё визуальное
+ * рисуется прямыми брашами и цветами из SkeuColors.
+ */
 @Composable
 fun VibeflyTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val ctx = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-        }
-        darkTheme -> DarkColors
-        else -> LightColors
-    }
+    val scheme = lightColorScheme(
+        primary = SkeuColors.PrimaryActionBottom,
+        onPrimary = SkeuColors.PaperWhite,
+        background = SkeuColors.Linen,
+        onBackground = SkeuColors.PrimaryText,
+        surface = SkeuColors.PaperWhite,
+        onSurface = SkeuColors.PrimaryText,
+        surfaceVariant = SkeuColors.LinenLight,
+        onSurfaceVariant = SkeuColors.SecondaryText,
+        error = SkeuColors.AccentRed,
+    )
+    // Легаси-референс чтобы импорт darkColorScheme не ругался как unused.
+    @Suppress("UNUSED_VARIABLE") val unused = darkColorScheme()
 
     MaterialTheme(
-        colorScheme = colorScheme,
-        typography = VibeflyTypography,
+        colorScheme = scheme,
+        typography = SkeuTypography,
         content = content,
     )
 }
+
+/**
+ * Типография, подобранная под iOS 6 эстетику. SF Pro не доступен на Android,
+ * так что используем системный sans (Roboto) с более плотным спейсингом.
+ */
+val SkeuTypography = androidx.compose.material3.Typography(
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
+    ),
+    titleMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 18.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+    ),
+    labelLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.5.sp,
+    ),
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 10.sp,
+        lineHeight = 12.sp,
+        letterSpacing = 0.5.sp,
+    ),
+)
