@@ -1,35 +1,56 @@
-# Android-приложение
+# Android-приложение VibeFly
 
-Kotlin + Jetpack Compose APK. Обёртка над namespace-runtime + UI поверх агента.
+Kotlin + Jetpack Compose. Точка входа всего продукта. Внутри: UI + Foreground Service + JNI-обёртка над namespace-runtime'ом, внутри которого живёт Debian + Go-агент.
 
 ## Статус
 
-Не начат. Планируется к фазе 2.
+Каркас готов, компилируется, ставится на телефон. Реальная функциональность появится по фазам.
 
-## Package name
+## Как собрать
 
-`by.vibefly.app`
-
-## Минимальные требования
-
-- Android 10 (API 29) +
-- 4 ГБ RAM минимум, 6+ рекомендуется
-- 16 ГБ свободного интернал storage
-- Root (KernelSU-Next recommended) для полного функционала; без root — degraded mode
-
-## Ключевые экраны (из мокапов)
-
-1. Onboarding (диагностика устройства, выбор runtime, Cloudflare привязка)
-2. Dashboard (метрики устройства, список apps)
-3. App detail (лайв-логи, env, deploys)
-4. AI Chat
-5. Marketplace
-6. Settings
-
-## Как собрать (позже)
+Требуется Android Studio Ladybug Feature Drop (2024.2.2)+ или выше, JDK 17, Android SDK 35.
 
 ```bash
+cd apps/android
+# Первый раз: сгенерировать gradle-wrapper.
+gradle wrapper --gradle-version 8.10.2
 ./gradlew assembleDebug
-# или
-./gradlew bundleRelease
 ```
+
+APK будет в `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Пакеты
+
+- `by.vibefly.app` — Application, MainActivity
+- `by.vibefly.app.service` — Foreground Service, BootReceiver, notification channels
+- `by.vibefly.app.runtime` — JNI-обёртка над namespace-runtime
+- `by.vibefly.app.agent` — Ktor-клиент к Go-агенту на 127.0.0.1:3001
+- `by.vibefly.app.ui` — NavHost + bottom navigation
+- `by.vibefly.app.ui.theme` — Material 3 theme + brand colors
+- `by.vibefly.app.ui.screens` — dashboard, chat, marketplace, settings, app detail
+
+## Экраны
+
+| Экран | Статус | Фаза |
+|---|---|---|
+| Dashboard (health + apps) | Скелет с фейк-данными | 1 |
+| App detail | TODO | 1 |
+| Chat (AI) | TODO | 4 |
+| Marketplace | TODO | 2 |
+| Settings | TODO | 1–2 |
+| Onboarding | TODO | 2 |
+
+## Дизайнерские решения
+
+- **Edge-to-edge** включён через `enableEdgeToEdge()`.
+- **Dynamic color** (Material You) включен для Android 12+, fallback на brand-палитру.
+- **Бренд-цвета:** зелёный (running, success), индиго (links, actions), фиолетовый (AI accent).
+
+## TODO ближайшее
+
+- [ ] gradle-wrapper.jar (добавится локально через `gradle wrapper` при первой сборке)
+- [ ] gradlew/gradlew.bat
+- [ ] Реальная реализация RuntimeManager (JNI к Droidspaces / proot)
+- [ ] AgentClient методы /health, /apps, /apps/{id}/restart
+- [ ] WebSocket-подписка на логи
+- [ ] Storage permission flow для загрузки rootfs.img

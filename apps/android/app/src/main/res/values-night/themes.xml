@@ -1,0 +1,6 @@
+<resources>
+    <!-- Splash. Будет подключён через androidx.core.splashscreen при добавлении пакета. -->
+    <style name="Theme.VibeFly.Splash" parent="Theme.VibeFly">
+        <item name="android:windowBackground">@color/black</item>
+    </style>
+</resources>
