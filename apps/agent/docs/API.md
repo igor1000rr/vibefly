@@ -4,7 +4,7 @@
 
 Авторизация — `Authorization: Bearer <token>`. Токен генерируется Android-приложением при первом запуске и прописывается в `/etc/vibefly/agent.toml`. При пустом токене в конфиге авторизация отключена (режим разработки).
 
-## v0.1 — текущие эндпоинты
+## v0.2 — текущие эндпоинты
 
 ### `GET /health`
 
@@ -13,7 +13,7 @@
 ```json
 {
   "status": "ok",
-  "version": "0.0.1-dev",
+  "version": "0.0.2-dev",
   "time": "2026-05-11T18:00:00Z"
 }
 ```
@@ -62,7 +62,7 @@
 
 ### `POST /apps/{id}/restart`
 
-Переводит приложение в `running`. В v0.1 это имитация; в v0.2 будет `systemctl restart vibefly-app-<id>`.
+Переводит приложение в `running`. В v0.2 это имитация; в v0.3 будет `systemctl restart vibefly-app-<id>`.
 
 ```json
 { "status": "restarted", "id": "amina-bot" }
@@ -72,7 +72,27 @@
 
 Переводит приложение в `stopped`.
 
-## v0.2 — план
+### `GET /apps/{id}/logs?lines=N`
+
+Последние N записей лога (по умолчанию 100). Каждая запись:
+
+```json
+{
+  "time": "2026-05-11T09:41:14Z",
+  "app": "amina-bot",
+  "level": "info",
+  "source": "grammy",
+  "message": "POST /webhook 200 · 12ms"
+}
+```
+
+### `WS /apps/{id}/logs/stream`
+
+WebSocket-стрим логов. Сначала отдаётся backlog последних 100 записей, дальше — лайв-поток новых записей.
+
+В фазе 1 источник — внутренний fake-генератор. В фазе 2 заменится на journald-вывод через `journalctl -fu vibefly-app-<id>`.
+
+## v0.3 — план
 
 ```
 POST   /apps                              — создать из git URL
@@ -81,14 +101,7 @@ POST   /apps/{id}/start                   — start
 POST   /apps/{id}/deploy                  — git pull + build + reload
 GET    /apps/{id}/env                     — read env (с маскированием)
 PUT    /apps/{id}/env                     — update env
-GET    /apps/{id}/logs?lines=N            — последние N строк
-```
-
-## v0.3 — WebSocket
-
-```
-WS /apps/{id}/logs/stream    — лайв-стрим stdout/stderr
-WS /system/stream            — лайв-метрики раз в 5–1 секунду
+WS     /system/stream                     — лайв-метрики
 ```
 
 ## v0.4–0.5 — AI tools
