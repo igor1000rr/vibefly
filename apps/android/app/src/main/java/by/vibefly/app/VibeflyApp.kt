@@ -5,16 +5,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import by.vibefly.app.data.ServiceLocator
 import by.vibefly.app.service.RuntimeChannels
 
 /**
- * Глобальный application class. Пока только регистрирует каналы уведомлений.
- * В будущем сюда переедет DI-граф (Koin/Hilt) и инициализация RuntimeManager.
+ * Глобальный application class. Инициализирует ServiceLocator и регистрирует
+ * каналы уведомлений.
  */
 class VibeflyApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        ServiceLocator.init(this)
         registerNotificationChannels()
     }
 

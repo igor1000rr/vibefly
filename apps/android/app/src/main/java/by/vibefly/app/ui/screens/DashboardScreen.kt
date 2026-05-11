@@ -23,24 +23,31 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import by.vibefly.app.R
+import by.vibefly.app.agent.SystemMetricsDto
+import by.vibefly.app.data.AppItem
+import by.vibefly.app.data.AppStatus
 
 /**
  * Главный экран — состояние устройства + список приложений.
- * Пока все данные — фейки, чтобы видеть верстку. Реальное состояние придёт из
- * AgentClient + RuntimeManager после интеграции.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     onAppClick: (String) -> Unit,
+    viewModel: DashboardViewModel = viewModel(),
 ) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
     Scaffold(
         topBar = {
             TopAppBar(title = { Text(stringResource(R.string.dashboard_title)) })
@@ -53,7 +60,10 @@ fun DashboardScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { HealthCard() }
+            item { HealthCard(metrics = state.metrics) }
+            if (state.error != null) {
+                item { ErrorCard(text = state.error.orEmpty()) }
+            }
             item {
                 Text(
                     text = stringResource(R.string.dashboard_apps_section),
@@ -61,7 +71,16 @@ fun DashboardScreen(
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
-            items(FakeApps) { app ->
+            if (state.apps.isEmpty() && state.error == null) {
+                item {
+                    Text(
+                        text = stringResource(R.string.dashboard_empty_apps),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            items(state.apps, key = { it.id }) { app ->
                 AppRow(item = app, onClick = { onAppClick(app.id) })
             }
         }
@@ -69,7 +88,7 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun HealthCard() {
+private fun HealthCard(metrics: SystemMetricsDto?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -88,10 +107,24 @@ private fun HealthCard() {
                     .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                HealthMetric(stringResource(R.string.dashboard_health_battery), "78%")
-                HealthMetric(stringResource(R.string.dashboard_health_temp), "38\u00B0C")
-                HealthMetric(stringResource(R.string.dashboard_health_cpu), "23%")
-                HealthMetric(stringResource(R.string.dashboard_health_ram), "2.1G")
+                HealthMetric(
+                    stringResource(R.string.dashboard_health_battery),
+                    metrics?.let { "${it.batteryLevel}%" } ?: "\u2014",
+                )
+                HealthMetric(
+                    stringResource(R.string.dashboard_health_temp),
+                    metrics?.let { "%.0f\u00B0C".format(it.temperatureC) } ?: "\u2014",
+                )
+                HealthMetric(
+                    stringResource(R.string.dashboard_health_cpu),
+                    metrics?.let { "%.0f%%".format(it.cpuPercent) } ?: "\u2014",
+                )
+                HealthMetric(
+                    stringResource(R.string.dashboard_health_ram),
+                    metrics?.let {
+                        "%.1fG".format(it.ramUsedMb / 1024.0)
+                    } ?: "\u2014",
+                )
             }
         }
     }
@@ -114,24 +147,31 @@ private fun HealthMetric(label: String, value: String) {
     }
 }
 
-private data class AppListItem(
-    val id: String,
-    val name: String,
-    val subtitle: String,
-    val status: AppStatus,
-)
-
-private enum class AppStatus { Running, Deploying, Stopped }
-
-private val FakeApps = listOf(
-    AppListItem("amina-bot", "amina-bot", "@AIAMINABOT \u00B7 :3001", AppStatus.Running),
-    AppListItem("tonforge-api", "tonforge-api", "api.tonforge.org", AppStatus.Running),
-    AppListItem("azcrm-staging", "azcrm-staging", "staging.azgroup.net", AppStatus.Deploying),
-    AppListItem("analytics-cron", "analytics-cron", "internal \u00B7 cron", AppStatus.Stopped),
-)
+@Composable
+private fun ErrorCard(text: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = "\u0410\u0433\u0435\u043D\u0442 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
+            )
+        }
+    }
+}
 
 @Composable
-private fun AppRow(item: AppListItem, onClick: () -> Unit) {
+private fun AppRow(item: AppItem, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -145,12 +185,9 @@ private fun AppRow(item: AppListItem, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                Text(item.name, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    text = item.subtitle,
+                    item.subtitle,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -170,6 +207,8 @@ private fun StatusChip(status: AppStatus) {
         AppStatus.Running -> stringResource(R.string.status_running) to MaterialTheme.colorScheme.primary
         AppStatus.Deploying -> stringResource(R.string.status_deploying) to MaterialTheme.colorScheme.tertiary
         AppStatus.Stopped -> stringResource(R.string.status_stopped) to MaterialTheme.colorScheme.onSurfaceVariant
+        AppStatus.Failed -> stringResource(R.string.status_error) to MaterialTheme.colorScheme.error
+        AppStatus.Unknown -> "\u2014" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
