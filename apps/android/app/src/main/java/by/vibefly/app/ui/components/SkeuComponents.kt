@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,8 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -34,35 +34,27 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Text
 import by.vibefly.app.ui.theme.PhosphorTint
 import by.vibefly.app.ui.theme.SkeuColors
 import by.vibefly.app.ui.theme.SkeuGradients
 
 /**
- * Скевоморфные iOS 6 компоненты VibeFly. Один файл по двум причинам:
- * импорты проще, и эти примитивы тесно связаны (NavBar часто содержит IosNavButton,
- * GroupedRow обычно держит PhosphorIcon, и так далее).
- *
- * Все размеры в dp подобраны под Note 14S (≈400dp ширина portrait).
+ * Скевоморфные iOS 6 компоненты VibeFly. Один файл — потому что эти примитивы
+ * тесно связаны (NavBar внутри держит IosNavButton, GroupedRow обычно
+ * содержит PhosphorIcon, и так далее). Размеры подобраны под Note 14S.
  */
 
-// ─── NavBar ───────────────────────────────────────────────────────────────────
+// ─── NavBar ──────────────────────────────────────────────────────────────────
 
 private val NavBarHeight = 44.dp
 
-/**
- * Глянцевый синий nav bar в стиле iOS 6. Высота 44dp, четырёхступенчатый градиент,
- * тонкий тёмный stroke снизу, тень под текстом заголовка.
- *
- * leading и trailing — слоты для IosNavButton, иконок или Spacer'ов.
- */
 @Composable
 fun IosNavBar(
     title: String,
@@ -76,17 +68,14 @@ fun IosNavBar(
             .height(NavBarHeight)
             .background(SkeuGradients.navBar())
             .drawBehind {
-                // Тонкая тёмная линия снизу — стык с контентом.
-                val stroke = 1f
                 drawLine(
                     color = SkeuColors.NavBarStroke,
-                    start = Offset(0f, size.height - stroke / 2),
-                    end = Offset(size.width, size.height - stroke / 2),
-                    strokeWidth = stroke,
+                    start = Offset(0f, size.height - 0.5f),
+                    end = Offset(size.width, size.height - 0.5f),
+                    strokeWidth = 1f,
                 )
             },
     ) {
-        // Заголовок строго по центру.
         Text(
             text = title,
             color = Color.White,
@@ -115,9 +104,6 @@ fun IosNavBar(
     }
 }
 
-/**
- * Маленькая глянцевая кнопка для nav bar. "‹ Apps", "+ Deploy", "Edit".
- */
 @Composable
 fun IosNavButton(
     text: String,
@@ -161,13 +147,10 @@ fun IosNavButton(
     }
 }
 
-// ─── Section header (uppercase grey label над grouped table) ────────────────
+// ─── Section header ──────────────────────────────────────────────────────────
 
 @Composable
-fun SectionHeader(
-    text: String,
-    modifier: Modifier = Modifier,
-) {
+fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text.uppercase(),
         color = SkeuColors.SectionLabel,
@@ -188,19 +171,14 @@ fun SectionHeader(
 // ─── Grouped table & row ─────────────────────────────────────────────────────
 
 /**
- * Контейнер grouped table — белый блок с тонкой рамкой и закруглёнными углами.
- * Внутри располагаются GroupedRow с автоматическими разделителями.
+ * Контейнер grouped table. Внутри блока вызывай GroupedRow + GroupedDivider
+ * вручную — это явное API без скрытой DSL-магии и без багов с накоплением.
  */
 @Composable
 fun GroupedTable(
     modifier: Modifier = Modifier,
-    content: @Composable GroupedTableScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
-    val scope = remember { GroupedTableScopeImpl() }
-    // Сначала собираем элементы.
-    scope.content()
-    val rows = scope.rows
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -209,7 +187,6 @@ fun GroupedTable(
             .background(SkeuColors.PaperWhite)
             .border(1.dp, SkeuColors.PaperBorder, RoundedCornerShape(8.dp))
             .drawBehind {
-                // Тонкий белый highlight сверху — псевдо-объём.
                 drawLine(
                     color = Color.White.copy(alpha = 0.7f),
                     start = Offset(0f, 1f),
@@ -218,38 +195,20 @@ fun GroupedTable(
                 )
             },
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            rows.forEachIndexed { index, row ->
-                row.invoke()
-                if (index < rows.lastIndex) {
-                    HorizontalDivider(
-                        thickness = 0.5.dp,
-                        color = SkeuColors.RowDivider,
-                        modifier = Modifier.padding(start = 12.dp),
-                    )
-                }
-            }
-        }
+        Column(modifier = Modifier.fillMaxWidth(), content = content)
     }
 }
 
-interface GroupedTableScope {
-    fun row(content: @Composable () -> Unit)
+/** Тонкий 0.5dp разделитель между строками grouped table, со сдвигом слева. */
+@Composable
+fun GroupedDivider() {
+    HorizontalDivider(
+        thickness = 0.5.dp,
+        color = SkeuColors.RowDivider,
+        modifier = Modifier.padding(start = 12.dp),
+    )
 }
 
-private class GroupedTableScopeImpl : GroupedTableScope {
-    val rows = mutableListOf<@Composable () -> Unit>()
-    override fun row(content: @Composable () -> Unit) {
-        rows.add(content)
-    }
-}
-
-/**
- * Строка grouped table. Слева — leading (обычно PhosphorIcon), по центру — текст
- * (label + опциональный hint), справа — trailing (значение, toggle, кнопка).
- *
- * chevron=true рисует серый ›, если строка кликабельная навигация.
- */
 @Composable
 fun GroupedRow(
     label: String,
@@ -264,11 +223,13 @@ fun GroupedRow(
     val rowMod = modifier
         .fillMaxWidth()
         .defaultMinSize(minHeight = 40.dp)
-        .let { if (onClick != null) it.clickable(
-            interactionSource = remember { MutableInteractionSource() },
-            indication = null,
-            onClick = onClick,
-        ) else it }
+        .let {
+            if (onClick != null) it.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ) else it
+        }
         .padding(horizontal = 12.dp, vertical = 8.dp)
 
     Row(
@@ -311,10 +272,6 @@ fun GroupedRow(
 
 // ─── iOS toggle ──────────────────────────────────────────────────────────────
 
-/**
- * Аутентичный iOS-toggle: трек 46x26dp с градиентом, белый thumb 24x24dp
- * сдвигается по горизонтали с анимацией.
- */
 @Composable
 fun IosToggle(
     checked: Boolean,
@@ -338,7 +295,6 @@ fun IosToggle(
             .background(trackBrush)
             .border(1.dp, strokeColor, RoundedCornerShape(13.dp))
             .drawBehind {
-                // Внутренняя тень сверху.
                 drawLine(
                     color = Color.Black.copy(alpha = 0.15f),
                     start = Offset(0f, 1f),
@@ -352,7 +308,6 @@ fun IosToggle(
                 onClick = { onCheckedChange(!checked) },
             ),
     ) {
-        // Thumb — белый круг с тонкой обводкой и подложкой.
         Box(
             modifier = Modifier
                 .padding(start = thumbOffset, top = 1.dp)
@@ -372,12 +327,8 @@ fun IosToggle(
     }
 }
 
-// ─── Phosphor icon (24dp rounded square с градиентом) ───────────────────────
+// ─── Phosphor icon ───────────────────────────────────────────────────────────
 
-/**
- * Маленькая "фосфорная" иконка в стиле iOS 6 — закруглённый квадрат с градиентом,
- * тонким white highlight сверху, и контентом внутри (обычно белый глиф).
- */
 @Composable
 fun PhosphorIcon(
     tint: PhosphorTint,
@@ -393,7 +344,6 @@ fun PhosphorIcon(
             .background(SkeuGradients.phosphor(tint.top, tint.bottom))
             .border(0.5.dp, Color.Black.copy(alpha = 0.25f), RoundedCornerShape(cornerRadius))
             .drawBehind {
-                // Inset highlight сверху для объёма.
                 drawLine(
                     color = Color.White.copy(alpha = 0.5f),
                     start = Offset(2f, 1.5f),
@@ -406,9 +356,6 @@ fun PhosphorIcon(
     )
 }
 
-/**
- * Удобный shortcut: PhosphorIcon с одним unicode-глифом по центру.
- */
 @Composable
 fun PhosphorIcon(
     tint: PhosphorTint,
@@ -421,13 +368,13 @@ fun PhosphorIcon(
         Text(
             text = glyph,
             color = Color.White,
-            fontSize = with(androidx.compose.ui.platform.LocalDensity.current) { glyphSize.toSp() },
+            fontSize = with(LocalDensity.current) { glyphSize.toSp() },
             fontWeight = FontWeight.Medium,
         )
     }
 }
 
-// ─── iOS-кнопки (primary & glossy gray) ─────────────────────────────────────
+// ─── iOS-кнопки ──────────────────────────────────────────────────────────────
 
 @Composable
 fun IosButtonPrimary(
@@ -508,7 +455,7 @@ fun IosButtonGlossy(
     }
 }
 
-// ─── Segmented control (Overview / Logs / Env / Deploys) ────────────────────
+// ─── Segmented control ──────────────────────────────────────────────────────
 
 @Composable
 fun SegmentedControl(
@@ -517,28 +464,28 @@ fun SegmentedControl(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val height = 28.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(28.dp)
+            .height(height)
             .clip(RoundedCornerShape(5.dp))
             .border(1.dp, SkeuColors.GlossyBlueTop, RoundedCornerShape(5.dp)),
     ) {
         items.forEachIndexed { index, label ->
             val isSelected = index == selectedIndex
-            val itemMod = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .background(
-                    if (isSelected) SolidColor(SkeuColors.NavBarMidDark)
-                    else SolidColor(SkeuColors.PaperWhite)
-                )
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { onSelect(index) },
-                )
-            Box(modifier = itemMod, contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(if (isSelected) SkeuColors.NavBarMidDark else SkeuColors.PaperWhite)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onSelect(index) },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     text = label,
                     color = if (isSelected) Color.White else SkeuColors.NavBarMidDark,
@@ -557,24 +504,20 @@ fun SegmentedControl(
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .fillMaxHeightBox()
-                        .background(SkeuColors.GlossyBlueTop)
+                        .fillMaxHeight()
+                        .background(SkeuColors.GlossyBlueTop),
                 )
             }
         }
     }
 }
 
-private fun Modifier.fillMaxHeightBox(): Modifier = this.then(
-    Modifier.height(28.dp)
-)
-
-// ─── Tab bar (нижний таб-бар на 4 вкладки) ──────────────────────────────────
+// ─── Tab bar ─────────────────────────────────────────────────────────────────
 
 data class TabBarItem(
     val key: String,
     val label: String,
-    val glyph: String, // unicode/emoji или одиночный символ
+    val glyph: String,
 )
 
 @Composable
@@ -605,7 +548,7 @@ fun TabBar(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxHeight()
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -633,10 +576,7 @@ fun TabBar(
     }
 }
 
-// ─── Linen background modifier ──────────────────────────────────────────────
+// ─── Linen background ────────────────────────────────────────────────────────
 
-/**
- * Линеновый фон. На первом шаге — просто плотный цвет SkeuColors.Linen.
- * Текстура будет добавлена в полировочном проходе через repeating pattern.
- */
+/** Линеновый фон. На фазе 1 — плотный цвет; текстура добавится в полировке. */
 fun Modifier.linenBackground(): Modifier = this.background(SkeuColors.Linen)
