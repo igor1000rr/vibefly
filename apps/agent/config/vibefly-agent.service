@@ -1,0 +1,25 @@
+[Unit]
+Description=VibeFly agent — REST API для управления приложениями
+Documentation=https://github.com/igor1000rr/vibefly
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/vibefly-agent --config /etc/vibefly/agent.toml
+Restart=on-failure
+RestartSec=5
+
+# Базовая изоляция.
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/vibefly /var/log/vibefly /etc/vibefly
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibefly-agent
+
+[Install]
+WantedBy=multi-user.target
