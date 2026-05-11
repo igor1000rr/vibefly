@@ -49,6 +49,8 @@ class AppsRepository(private val client: AgentClient) {
 
     suspend fun list(): List<AppItem> = client.listApps().map { it.toItem() }
 
+    suspend fun start(id: String) { client.startApp(id) }
+
     suspend fun restart(id: String) { client.restartApp(id) }
 
     suspend fun stop(id: String) { client.stopApp(id) }
