@@ -18,16 +18,18 @@ import (
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/metrics"
+	"by.vibefly/agent/internal/supervisor"
 )
 
 // Dependencies — всё что нужно роутеру.
 type Dependencies struct {
-	Logger  *slog.Logger
-	Version string
-	Metrics metrics.Reader
-	Apps    *apps.Store
-	Logs    *logs.Streamer
-	Token   string
+	Logger     *slog.Logger
+	Version    string
+	Metrics    metrics.Reader
+	Apps       *apps.Store
+	Logs       *logs.Streamer
+	Supervisor supervisor.Supervisor
+	Token      string
 }
 
 // NewRouter возвращает http.Handler со всеми ручками.
@@ -53,7 +55,10 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Use(authMiddleware(deps.Token))
 		r.Get("/system", systemHandler(deps))
 		r.Get("/apps", listAppsHandler(deps))
+		r.Post("/apps", installAppHandler(deps))
 		r.Get("/apps/{id}", getAppHandler(deps))
+		r.Delete("/apps/{id}", uninstallAppHandler(deps))
+		r.Post("/apps/{id}/start", startAppHandler(deps))
 		r.Post("/apps/{id}/restart", restartAppHandler(deps))
 		r.Post("/apps/{id}/stop", stopAppHandler(deps))
 		r.Get("/apps/{id}/logs", logsRecentHandler(deps))
@@ -66,9 +71,10 @@ func NewRouter(deps Dependencies) http.Handler {
 func healthHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":  "ok",
-			"version": deps.Version,
-			"time":    time.Now().UTC(),
+			"status":                "ok",
+			"version":               deps.Version,
+			"time":                  time.Now().UTC(),
+			"supervisor_available":  deps.Supervisor != nil && deps.Supervisor.Available(),
 		})
 	}
 }
@@ -94,6 +100,80 @@ func getAppHandler(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, app)
+	}
+}
+
+// installRequest — тело POST /apps.
+type installRequest struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	WorkingDir string            `json:"working_dir"`
+	StartCmd   string            `json:"start_cmd"`
+	Env        map[string]string `json:"env"`
+	MemoryMax  string            `json:"memory_max"`
+	CPUQuota   string            `json:"cpu_quota"`
+	Repo       string            `json:"repo"`
+	Branch     string            `json:"branch"`
+	Port       int               `json:"port"`
+	Domain     string            `json:"domain"`
+}
+
+func installAppHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req installRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if req.ID == "" || req.StartCmd == "" {
+			writeError(w, http.StatusBadRequest, "id и start_cmd обязательны")
+			return
+		}
+		spec := supervisor.AppSpec{
+			ID:         req.ID,
+			Name:       firstNonEmpty(req.Name, req.ID),
+			WorkingDir: req.WorkingDir,
+			StartCmd:   req.StartCmd,
+			Env:        req.Env,
+			MemoryMax:  req.MemoryMax,
+			CPUQuota:   req.CPUQuota,
+		}
+		meta := apps.App{
+			ID:     req.ID,
+			Name:   firstNonEmpty(req.Name, req.ID),
+			Repo:   req.Repo,
+			Branch: req.Branch,
+			Port:   req.Port,
+			Domain: req.Domain,
+			Status: apps.StatusStopped,
+		}
+		if err := deps.Apps.Install(spec, meta); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "installed", "id": req.ID})
+	}
+}
+
+func uninstallAppHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if err := deps.Apps.Uninstall(id); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled", "id": id})
+	}
+}
+
+func startAppHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if err := deps.Apps.Start(id); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "started", "id": id})
 	}
 }
 
@@ -136,6 +216,8 @@ func logsRecentHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+// logsStreamHandler отдаёт лайв-логи. Если supervisor доступен — использует
+// journalctl -fu через supervisor.FollowLogs, иначе fallback на in-memory streamer.
 func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -153,13 +235,36 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 		ctx := r.Context()
 		defer conn.Close(websocket.StatusNormalClosure, "")
 
-		// Сначала отдаём недавние 100 записей как backlog.
+		// Backlog из ring-buffer (в нём и фейк, и реальные если кто-то писал в Streamer).
 		for _, e := range deps.Logs.Recent(id, 100) {
 			if err := wsjson.Write(ctx, conn, e); err != nil {
 				return
 			}
 		}
 
+		// Если supervisor доступен — берём лайв-поток journalctl.
+		if deps.Supervisor != nil && deps.Supervisor.Available() {
+			follow, err := deps.Supervisor.FollowLogs(ctx, id)
+			if err != nil {
+				deps.Logger.Warn("follow logs failed", "id", id, "err", err)
+				return
+			}
+			for line := range follow {
+				entry := logs.Entry{
+					Time:    time.Now().UTC(),
+					App:     id,
+					Level:   classifyLogLevel(line),
+					Source:  "journal",
+					Message: line,
+				}
+				if err := wsjson.Write(ctx, conn, entry); err != nil {
+					return
+				}
+			}
+			return
+		}
+
+		// Fallback на in-memory pub/sub.
 		sub := deps.Logs.Subscribe(ctx, id)
 		for {
 			select {
@@ -175,6 +280,26 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// classifyLogLevel — грубая эвристика для подкраски строк journalctl.
+func classifyLogLevel(line string) logs.Level {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "error") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal"):
+		return logs.LevelError
+	case strings.Contains(lower, "warn"):
+		return logs.LevelWarn
+	default:
+		return logs.LevelInfo
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func authMiddleware(token string) func(next http.Handler) http.Handler {
@@ -202,7 +327,6 @@ func slogRequestLogger(logger *slog.Logger) func(next http.Handler) http.Handler
 
 			next.ServeHTTP(ww, r)
 
-			// WebSocket upgrade всегда 101; логируем как long-poll.
 			logger.Info("http",
 				"method", r.Method,
 				"path", r.URL.Path,
