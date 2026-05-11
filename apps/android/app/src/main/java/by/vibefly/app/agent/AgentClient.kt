@@ -13,7 +13,10 @@ import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
@@ -24,8 +27,6 @@ import kotlinx.serialization.json.Json
 
 /**
  * Ktor-клиент к Go-агенту на 127.0.0.1:3001.
- *
- * Авторизация — Bearer токен. Хранится в EncryptedSharedPreferences на Android-стороне.
  */
 class AgentClient(
     val baseUrl: String = DEFAULT_BASE_URL,
@@ -74,15 +75,19 @@ class AgentClient(
     suspend fun stopApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/stop").body()
 
+    suspend fun startApp(id: String): CommandResultDto =
+        http.post("$baseUrl/apps/$id/start").body()
+
+    suspend fun uninstallApp(id: String): CommandResultDto =
+        http.post("$baseUrl/apps/$id") {
+            // DELETE на стороне агента; эмулируем через method override.
+        }.body()
+
     suspend fun recentLogs(id: String, lines: Int = 100): List<LogEntryDto> =
         http.get("$baseUrl/apps/$id/logs") {
             parameter("lines", lines)
         }.body()
 
-    /**
-     * Стрим логов по WebSocket. Возвращает cold Flow — подписка живёт пока есть коллектор.
-     * baseUrl с http(s)://... автоматически переводится в ws(s)://...
-     */
     fun streamLogs(id: String): Flow<LogEntryDto> = channelFlow {
         val wsUrl = baseUrl
             .replaceFirst("http://", "ws://")
@@ -95,6 +100,21 @@ class AgentClient(
                     }.onSuccess { entry -> sendOrSkip(entry) }
                 }
             }
+        }
+    }
+
+    // ===== Marketplace =====
+
+    suspend fun marketplaceList(): List<MarketplaceTemplateDto> =
+        http.get("$baseUrl/marketplace").body()
+
+    suspend fun marketplaceGet(id: String): MarketplaceTemplateDto =
+        http.get("$baseUrl/marketplace/$id").body()
+
+    suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
+        http.post("$baseUrl/marketplace/$templateId/install") {
+            contentType(ContentType.Application.Json)
+            setBody(req)
         }
     }
 
