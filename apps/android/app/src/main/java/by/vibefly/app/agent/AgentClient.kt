@@ -8,31 +8,37 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
+import kotlinx.coroutines.channels.ProducerScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.Json
 
 /**
  * Ktor-клиент к Go-агенту на 127.0.0.1:3001.
  *
- * Авторизация — Bearer токен. Токен хранится в EncryptedSharedPreferences на Android-стороне,
- * а агент его читает из agent.toml. На старте фазы 1 — пустой, auth отключён.
+ * Авторизация — Bearer токен. Хранится в EncryptedSharedPreferences на Android-стороне.
  */
 class AgentClient(
     val baseUrl: String = DEFAULT_BASE_URL,
     private val tokenProvider: () -> String? = { null },
 ) {
+    private val jsonCodec = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        isLenient = true
+    }
+
     val http: HttpClient = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                explicitNulls = false
-                isLenient = true
-            })
-        }
+        install(ContentNegotiation) { json(jsonCodec) }
         install(WebSockets)
         install(HttpTimeout) {
             requestTimeoutMillis = 5_000
@@ -68,8 +74,36 @@ class AgentClient(
     suspend fun stopApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/stop").body()
 
+    suspend fun recentLogs(id: String, lines: Int = 100): List<LogEntryDto> =
+        http.get("$baseUrl/apps/$id/logs") {
+            parameter("lines", lines)
+        }.body()
+
+    /**
+     * Стрим логов по WebSocket. Возвращает cold Flow — подписка живёт пока есть коллектор.
+     * baseUrl с http(s)://... автоматически переводится в ws(s)://...
+     */
+    fun streamLogs(id: String): Flow<LogEntryDto> = channelFlow {
+        val wsUrl = baseUrl
+            .replaceFirst("http://", "ws://")
+            .replaceFirst("https://", "wss://")
+        http.webSocket(urlString = "$wsUrl/apps/$id/logs/stream") {
+            for (frame in incoming) {
+                if (frame is Frame.Text) {
+                    runCatching {
+                        jsonCodec.decodeFromString(LogEntryDto.serializer(), frame.readText())
+                    }.onSuccess { entry -> sendOrSkip(entry) }
+                }
+            }
+        }
+    }
+
     fun close() {
         http.close()
+    }
+
+    private fun <T> ProducerScope<T>.sendOrSkip(value: T) {
+        trySend(value).onFailure { /* slow consumer */ }
     }
 
     companion object {
