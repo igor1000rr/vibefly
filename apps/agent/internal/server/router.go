@@ -17,19 +17,21 @@ import (
 
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/logs"
+	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/supervisor"
 )
 
 // Dependencies — всё что нужно роутеру.
 type Dependencies struct {
-	Logger     *slog.Logger
-	Version    string
-	Metrics    metrics.Reader
-	Apps       *apps.Store
-	Logs       *logs.Streamer
-	Supervisor supervisor.Supervisor
-	Token      string
+	Logger      *slog.Logger
+	Version     string
+	Metrics     metrics.Reader
+	Apps        *apps.Store
+	Logs        *logs.Streamer
+	Supervisor  supervisor.Supervisor
+	Marketplace *marketplace.Catalog
+	Token       string
 }
 
 // NewRouter возвращает http.Handler со всеми ручками.
@@ -63,6 +65,10 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Post("/apps/{id}/stop", stopAppHandler(deps))
 		r.Get("/apps/{id}/logs", logsRecentHandler(deps))
 		r.Get("/apps/{id}/logs/stream", logsStreamHandler(deps))
+
+		r.Get("/marketplace", marketplaceListHandler(deps))
+		r.Get("/marketplace/{id}", marketplaceGetHandler(deps))
+		r.Post("/marketplace/{id}/install", marketplaceInstallHandler(deps))
 	})
 
 	return r
@@ -71,10 +77,10 @@ func NewRouter(deps Dependencies) http.Handler {
 func healthHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":                "ok",
-			"version":               deps.Version,
-			"time":                  time.Now().UTC(),
-			"supervisor_available":  deps.Supervisor != nil && deps.Supervisor.Available(),
+			"status":               "ok",
+			"version":              deps.Version,
+			"time":                 time.Now().UTC(),
+			"supervisor_available": deps.Supervisor != nil && deps.Supervisor.Available(),
 		})
 	}
 }
@@ -129,30 +135,34 @@ func installAppHandler(deps Dependencies) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "id и start_cmd обязательны")
 			return
 		}
-		spec := supervisor.AppSpec{
-			ID:         req.ID,
-			Name:       firstNonEmpty(req.Name, req.ID),
-			WorkingDir: req.WorkingDir,
-			StartCmd:   req.StartCmd,
-			Env:        req.Env,
-			MemoryMax:  req.MemoryMax,
-			CPUQuota:   req.CPUQuota,
-		}
-		meta := apps.App{
-			ID:     req.ID,
-			Name:   firstNonEmpty(req.Name, req.ID),
-			Repo:   req.Repo,
-			Branch: req.Branch,
-			Port:   req.Port,
-			Domain: req.Domain,
-			Status: apps.StatusStopped,
-		}
-		if err := deps.Apps.Install(spec, meta); err != nil {
+		if err := installFromRequest(deps, req); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]string{"status": "installed", "id": req.ID})
 	}
+}
+
+func installFromRequest(deps Dependencies, req installRequest) error {
+	spec := supervisor.AppSpec{
+		ID:         req.ID,
+		Name:       firstNonEmpty(req.Name, req.ID),
+		WorkingDir: req.WorkingDir,
+		StartCmd:   req.StartCmd,
+		Env:        req.Env,
+		MemoryMax:  req.MemoryMax,
+		CPUQuota:   req.CPUQuota,
+	}
+	meta := apps.App{
+		ID:     req.ID,
+		Name:   firstNonEmpty(req.Name, req.ID),
+		Repo:   req.Repo,
+		Branch: req.Branch,
+		Port:   req.Port,
+		Domain: req.Domain,
+		Status: apps.StatusStopped,
+	}
+	return deps.Apps.Install(spec, meta)
 }
 
 func uninstallAppHandler(deps Dependencies) http.HandlerFunc {
@@ -235,14 +245,12 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 		ctx := r.Context()
 		defer conn.Close(websocket.StatusNormalClosure, "")
 
-		// Backlog из ring-buffer (в нём и фейк, и реальные если кто-то писал в Streamer).
 		for _, e := range deps.Logs.Recent(id, 100) {
 			if err := wsjson.Write(ctx, conn, e); err != nil {
 				return
 			}
 		}
 
-		// Если supervisor доступен — берём лайв-поток journalctl.
 		if deps.Supervisor != nil && deps.Supervisor.Available() {
 			follow, err := deps.Supervisor.FollowLogs(ctx, id)
 			if err != nil {
@@ -264,7 +272,6 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Fallback на in-memory pub/sub.
 		sub := deps.Logs.Subscribe(ctx, id)
 		for {
 			select {
@@ -281,6 +288,94 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 		}
 	}
 }
+
+// ─── Marketplace handlers ───────────────────────────────────────────────────
+
+func marketplaceListHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if deps.Marketplace == nil {
+			writeJSON(w, http.StatusOK, []marketplace.Template{})
+			return
+		}
+		writeJSON(w, http.StatusOK, deps.Marketplace.List())
+	}
+}
+
+func marketplaceGetHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if deps.Marketplace == nil {
+			writeError(w, http.StatusNotFound, "marketplace unavailable")
+			return
+		}
+		tpl, ok := deps.Marketplace.Get(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "template not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, tpl)
+	}
+}
+
+// marketplaceInstallRequest — пользовательские параметры (env, локальный id).
+type marketplaceInstallRequest struct {
+	AppID  string            `json:"app_id"` // как назвать установленное приложение
+	Domain string            `json:"domain"`
+	Port   int               `json:"port"`
+	Env    map[string]string `json:"env"`
+}
+
+func marketplaceInstallHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		templateID := chi.URLParam(r, "id")
+		if deps.Marketplace == nil {
+			writeError(w, http.StatusNotFound, "marketplace unavailable")
+			return
+		}
+		tpl, ok := deps.Marketplace.Get(templateID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "template not found")
+			return
+		}
+
+		var req marketplaceInstallRequest
+		_ = json.NewDecoder(r.Body).Decode(&req) // тело опционально
+
+		appID := firstNonEmpty(req.AppID, tpl.ID)
+		port := req.Port
+		if port == 0 {
+			port = tpl.DefaultPort
+		}
+
+		spec := supervisor.AppSpec{
+			ID:        appID,
+			Name:      tpl.Name,
+			StartCmd:  tpl.StartCmd,
+			Env:       req.Env,
+			MemoryMax: tpl.MemoryMax,
+		}
+		meta := apps.App{
+			ID:     appID,
+			Name:   tpl.Name,
+			Repo:   tpl.Repo,
+			Port:   port,
+			Domain: req.Domain,
+			Status: apps.StatusStopped,
+		}
+		if err := deps.Apps.Install(spec, meta); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"status":      "installed",
+			"id":          appID,
+			"template":    templateID,
+			"supervisor":  deps.Supervisor != nil && deps.Supervisor.Available(),
+		})
+	}
+}
+
+// ─── helpers ────────────────────────────────────────────────────────────────
 
 // classifyLogLevel — грубая эвристика для подкраски строк journalctl.
 func classifyLogLevel(line string) logs.Level {
