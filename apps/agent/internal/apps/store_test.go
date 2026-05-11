@@ -4,10 +4,14 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+
+	"by.vibefly/agent/internal/supervisor"
 )
 
 func newTestStore() *Store {
-	return NewStore(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// NopSupervisor — store работает на фейк-данных.
+	return NewStore(logger, &supervisor.NopSupervisor{})
 }
 
 func TestStore_List(t *testing.T) {
@@ -43,7 +47,6 @@ func TestStore_Get(t *testing.T) {
 func TestStore_Restart(t *testing.T) {
 	s := newTestStore()
 
-	// Остановленное приложение в fake-данных.
 	app, _ := s.Get("analytics-cron")
 	if app.Status != StatusStopped {
 		t.Fatalf("предусловие нарушено: ожидался stopped, получен %s", app.Status)
@@ -68,5 +71,12 @@ func TestStore_Stop(t *testing.T) {
 	app, _ := s.Get("amina-bot")
 	if app.Status != StatusStopped {
 		t.Errorf("ожидался stopped, получен %s", app.Status)
+	}
+}
+
+func TestStore_SupervisorAvailable(t *testing.T) {
+	s := newTestStore()
+	if s.SupervisorAvailable() {
+		t.Error("NopSupervisor.Available() должен возвращать false")
 	}
 }
