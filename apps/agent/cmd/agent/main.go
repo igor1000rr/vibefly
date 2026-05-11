@@ -15,6 +15,7 @@ import (
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/config"
 	"by.vibefly/agent/internal/logs"
+	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/server"
 	"by.vibefly/agent/internal/supervisor"
@@ -47,14 +48,13 @@ func main() {
 	defer cancel()
 
 	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir)
-	logger.Info("supervisor",
-		"available", sup.Available(),
-	)
+	logger.Info("supervisor", "available", sup.Available())
 
 	logStreamer := logs.NewStreamer(logger, 500)
 	appsStore := apps.NewStore(logger, sup)
+	catalog := marketplace.New()
 
-	// Если реальный supervisor недоступен — гоним фейк-логи для UI-разработки.
+	// Фейк-логи только в demo-режиме.
 	if !sup.Available() {
 		appIDs := make([]string, 0, len(appsStore.List()))
 		for _, a := range appsStore.List() {
@@ -64,13 +64,14 @@ func main() {
 	}
 
 	deps := server.Dependencies{
-		Logger:     logger,
-		Version:    Version,
-		Metrics:    metrics.New(),
-		Apps:       appsStore,
-		Logs:       logStreamer,
-		Supervisor: sup,
-		Token:      cfg.AuthToken,
+		Logger:      logger,
+		Version:     Version,
+		Metrics:     metrics.New(),
+		Apps:        appsStore,
+		Logs:        logStreamer,
+		Supervisor:  sup,
+		Marketplace: catalog,
+		Token:       cfg.AuthToken,
 	}
 
 	srv := &http.Server{
