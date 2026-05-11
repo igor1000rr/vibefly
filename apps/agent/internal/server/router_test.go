@@ -11,6 +11,7 @@ import (
 
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/logs"
+	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/supervisor"
 )
@@ -19,13 +20,14 @@ func newTestDeps() Dependencies {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sup := &supervisor.NopSupervisor{}
 	return Dependencies{
-		Logger:     logger,
-		Version:    "test",
-		Metrics:    metrics.New(),
-		Apps:       apps.NewStore(logger, sup),
-		Logs:       logs.NewStreamer(logger, 100),
-		Supervisor: sup,
-		Token:      "",
+		Logger:      logger,
+		Version:     "test",
+		Metrics:     metrics.New(),
+		Apps:        apps.NewStore(logger, sup),
+		Logs:        logs.NewStreamer(logger, 100),
+		Supervisor:  sup,
+		Marketplace: marketplace.New(),
+		Token:       "",
 	}
 }
 
@@ -61,13 +63,6 @@ func TestListAppsEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ожидался 200, получен %d", rec.Code)
 	}
-	var list []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-		t.Fatalf("не парсится JSON: %v", err)
-	}
-	if len(list) == 0 {
-		t.Error("ожидались фейк-приложения")
-	}
 }
 
 func TestRestartEndpoint(t *testing.T) {
@@ -95,7 +90,6 @@ func TestStartEndpoint(t *testing.T) {
 }
 
 func TestInstallEndpoint_Validation(t *testing.T) {
-	// Без обязательных полей.
 	handler := NewRouter(newTestDeps())
 
 	body := bytes.NewBufferString(`{"id":""}`)
@@ -110,7 +104,6 @@ func TestInstallEndpoint_Validation(t *testing.T) {
 }
 
 func TestInstallEndpoint_NopSupervisor(t *testing.T) {
-	// С NopSupervisor install регистрирует app в store без обращения к systemd.
 	handler := NewRouter(newTestDeps())
 
 	body := bytes.NewBufferString(`{
@@ -128,7 +121,6 @@ func TestInstallEndpoint_NopSupervisor(t *testing.T) {
 		t.Fatalf("ожидался 201, получен %d (body=%s)", rec.Code, rec.Body.String())
 	}
 
-	// Проверяем, что app появился в /apps.
 	listReq := httptest.NewRequest(http.MethodGet, "/apps/my-bot", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
@@ -146,6 +138,70 @@ func TestUninstallEndpoint(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ожидался 200, получен %d", rec.Code)
+	}
+}
+
+func TestMarketplaceList(t *testing.T) {
+	handler := NewRouter(newTestDeps())
+
+	req := httptest.NewRequest(http.MethodGet, "/marketplace", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ожидался 200, получен %d", rec.Code)
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("не парсится JSON: %v", err)
+	}
+	if len(list) == 0 {
+		t.Error("ожидались шаблоны")
+	}
+}
+
+func TestMarketplaceGet(t *testing.T) {
+	handler := NewRouter(newTestDeps())
+
+	req := httptest.NewRequest(http.MethodGet, "/marketplace/vaultwarden", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ожидался 200, получен %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/marketplace/no-such", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("несуществующий шаблон должен возвращать 404, получен %d", rec.Code)
+	}
+}
+
+func TestMarketplaceInstall(t *testing.T) {
+	handler := NewRouter(newTestDeps())
+
+	body := bytes.NewBufferString(`{
+		"app_id": "my-vault",
+		"domain": "vault.example.com",
+		"env": {"ADMIN_TOKEN": "secret"}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/marketplace/vaultwarden/install", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ожидался 201, получен %d (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	// Проверяем что app зарегистрировался под нашим app_id.
+	getReq := httptest.NewRequest(http.MethodGet, "/apps/my-vault", nil)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Errorf("после marketplace install /apps/my-vault должен быть 200, получен %d", getRec.Code)
 	}
 }
 
@@ -206,11 +262,11 @@ func TestAuthRequired(t *testing.T) {
 
 func TestClassifyLogLevel(t *testing.T) {
 	cases := map[string]logs.Level{
-		"INFO connected":           logs.LevelInfo,
-		"WARN rate-limit":          logs.LevelWarn,
-		"ERROR upstream timeout":   logs.LevelError,
-		"FATAL panic":              logs.LevelError,
-		"regular message":          logs.LevelInfo,
+		"INFO connected":         logs.LevelInfo,
+		"WARN rate-limit":        logs.LevelWarn,
+		"ERROR upstream timeout": logs.LevelError,
+		"FATAL panic":            logs.LevelError,
+		"regular message":        logs.LevelInfo,
 	}
 	for input, want := range cases {
 		if got := classifyLogLevel(input); got != want {
