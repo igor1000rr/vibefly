@@ -1,0 +1,61 @@
+name: rootfs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/rootfs-builder/**'
+      - 'apps/agent/**'
+      - '.github/workflows/rootfs.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build ARM64 rootfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: apps/agent/go.sum
+
+      - name: Build agent (arm64)
+        working-directory: apps/agent
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: |
+          go mod tidy
+          go build -ldflags "-s -w" -o bin/vibefly-agent-arm64 ./cmd/agent
+
+      - name: Install rootfs deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support zstd e2fsprogs
+
+      - name: Build rootfs
+        env:
+          AGENT_BIN: ${{ github.workspace }}/apps/agent/bin/vibefly-agent-arm64
+        run: |
+          sudo -E ./runtime/rootfs-builder/build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibefly-rootfs-arm64
+          path: runtime/rootfs-builder/out/rootfs.img.zst
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: runtime/rootfs-builder/out/rootfs.img.zst

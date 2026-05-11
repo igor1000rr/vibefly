@@ -1,0 +1,50 @@
+# Минимальный набор пакетов в Debian-rootfs для VibeFly.
+# Комментарии (строки с #) и пустые строки игнорируются в build.sh.
+
+# Init + базовый userspace.
+systemd
+systemd-sysv
+dbus
+locales
+tzdata
+ca-certificates
+
+# CLI и базовые утилиты.
+bash-completion
+curl
+wget
+ca-certificates
+openssl
+lsb-release
+less
+nano
+vim-tiny
+htop
+procps
+iproute2
+iptables
+netcat-openbsd
+jq
+zstd
+xz-utils
+unzip
+git
+openssh-client
+
+# Build tooling для пользовательских приложений.
+build-essential
+python3
+python3-pip
+python3-venv
+make
+
+# Web stack.
+nginx-light
+
+# Базы (пользователь включит их отдельно через marketplace).
+# postgresql-16 добавится позже из postgresql-bookworm-pgdg.
+# redis-server — тоже опционально.
+
+# Tunnel + VPN.
+# cloudflared — ставится из их .deb позднее в build.sh.
+# tailscale — ставится из их repo позднее.
