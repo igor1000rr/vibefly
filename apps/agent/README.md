@@ -1,34 +1,69 @@
-# Агент
+# VibeFly Agent
 
-Go-агент, живёт внутри Debian-rootfs как systemd-сервис. См. [docs/01-architecture.md](../../docs/01-architecture.md).
+Go-агент. Живёт внутри Debian rootfs как systemd-сервис и слушает на `127.0.0.1:3001`. Android-приложение в локальной петле общается с ним через REST + WebSocket.
 
 ## Статус
 
-Не начат. Планируется к фазе 1.
+v0.1 — каркас собран, билдится, запускается. Часть ручек на фейк-данных. Подробности в [docs/API.md](docs/API.md).
 
-## Первые эндпоинты
+## Структура
 
 ```
-GET  /health
-GET  /apps
-POST /apps/:id/restart
-GET  /apps/:id/logs?lines=100
+apps/agent/
+├── cmd/agent/main.go              — точка входа
+├── internal/
+│   ├── config/    — TOML-конфиг
+│   ├── server/    — chi-роутер + middleware
+│   ├── apps/      — in-memory store приложений
+│   └── metrics/   — чтение /proc и /sys (с fallback на синтетику на non-Linux)
+├── config/
+│   ├── agent.example.toml
+│   └── vibefly-agent.service     — systemd unit для rootfs
+├── docs/API.md
+└── Makefile
 ```
 
-## Стек
+## Как запустить локально (на десктопе)
 
-- Go 1.22+
-- chi router
-- nhooyr.io/websocket
-- sqlx + SQLite
-
-## Как запустить (позже)
+Нужен Go 1.22+.
 
 ```bash
-make build
-./bin/vibefly-agent --config /etc/vibefly/agent.toml
+cd apps/agent
+go mod tidy
+make run
 ```
 
-## API documentation
+Проверь в другом терминале:
 
-Will be in `docs/API.md` once endpoints stabilize.
+```bash
+curl -s localhost:3001/health | jq
+curl -s localhost:3001/system | jq
+curl -s localhost:3001/apps | jq
+curl -s localhost:3001/apps/amina-bot | jq
+curl -s -X POST localhost:3001/apps/amina-bot/restart | jq
+```
+
+На macOS / Windows метрики вернутся синтетические (это нормально для разработки UI). Реальные — только на Linux/Android.
+
+## Сборка под ARM64
+
+```bash
+make arm64
+# → bin/vibefly-agent-arm64
+```
+
+Этот бинарник пойдёт в Debian-rootfs, который впоследствии упакуется в APK.
+
+## Роудмап
+
+- v0.1 (сейчас): /health, /system, /apps, restart/stop на фейк-сторе
+- v0.2: реальный supervisor поверх systemd, deploy from git
+- v0.3: WebSocket-стрим логов, env-management
+- v0.4: AI tools API (read-only)
+- v0.5: AI tools API (approval-based mutations)
+
+## Тесты
+
+```bash
+make test
+```

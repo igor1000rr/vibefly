@@ -18,36 +18,35 @@ jobs:
           config: '.markdownlint.json'
         continue-on-error: true
 
-  # Будущие jobs (включать по мере появления кода):
-  #
-  # build-agent:
-  #   name: Build Go agent
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-go@v5
-  #       with:
-  #         go-version: '1.22'
-  #     - run: cd apps/agent && go build ./...
-  #     - run: cd apps/agent && go test ./...
-  #
-  # build-android:
-  #   name: Build Android APK
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-java@v4
-  #       with:
-  #         distribution: 'temurin'
-  #         java-version: '17'
-  #     - run: cd apps/android && ./gradlew assembleDebug
-  #
-  # build-cloud:
-  #   name: Build Next.js cloud
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '22'
-  #     - run: cd apps/cloud && npm ci && npm run build
+  build-agent:
+    name: Build Go agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: apps/agent/go.sum
+      - name: Tidy
+        run: go mod tidy
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race -count=1 ./...
+      - name: Build (linux/amd64)
+        run: go build -v ./...
+      - name: Build (linux/arm64)
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: go build -o bin/vibefly-agent-arm64 ./cmd/agent
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibefly-agent-arm64
+          path: apps/agent/bin/vibefly-agent-arm64
+          if-no-files-found: error
