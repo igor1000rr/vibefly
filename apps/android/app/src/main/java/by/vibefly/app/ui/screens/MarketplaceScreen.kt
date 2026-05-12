@@ -44,6 +44,7 @@ import by.vibefly.app.agent.MarketplaceEnvFieldDto
 import by.vibefly.app.agent.MarketplaceTemplateDto
 import by.vibefly.app.ui.components.GroupedDivider
 import by.vibefly.app.ui.components.GroupedTable
+import by.vibefly.app.ui.components.InDevelopmentBanner
 import by.vibefly.app.ui.components.IosButtonPrimary
 import by.vibefly.app.ui.components.IosNavBar
 import by.vibefly.app.ui.components.PhosphorIcon
@@ -57,9 +58,9 @@ import by.vibefly.app.ui.theme.SkeuColors
  *
  * Шаблоны сгруппированы по категориям. Каждая секция — GroupedTable, каждая
  * строка — кастомная TemplateRow с PhosphorIcon, текстами и кнопкой Install.
- * Тап Install:
- *   • Если у шаблона нет env_schema — сразу инстолируется
- *   • Если есть — открывается InstallDialog с полями для каждого env-параметра
+ *
+ * Раздел помечен InDevelopmentBanner — UI готов и тыкается, но install/uninstall
+ * через backend ещё в активной разработке (фаза 2).
  */
 @Composable
 fun MarketplaceScreen(
@@ -77,6 +78,7 @@ fun MarketplaceScreen(
 
     Column(modifier = Modifier.fillMaxSize().linenBackground()) {
         IosNavBar(title = "Marketplace")
+        InDevelopmentBanner(text = "Marketplace · в разработке")
 
         when {
             state.loading -> LoadingState()
@@ -255,15 +257,12 @@ private fun InstallDialog(
     onCancel: () -> Unit,
     onConfirm: (Map<String, String>) -> Unit,
 ) {
-    // Состояние полей — каждое инициализируется default-значением. SnapshotStateMap
-    // отслеживает изменения, поэтому derivedStateOf ниже реагирует автоматически.
     val values = remember(template.id) {
         mutableStateMapOf<String, String>().apply {
             template.envSchema.forEach { f -> put(f.key, f.default.orEmpty()) }
         }
     }
 
-    // Список labels required-полей, которые сейчас пусты. Пересчитывается лениво.
     val missingRequired by remember(template.id) {
         derivedStateOf {
             template.envSchema
