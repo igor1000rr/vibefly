@@ -50,3 +50,51 @@ jobs:
           name: vibefly-agent-arm64
           path: apps/agent/bin/vibefly-agent-arm64
           if-no-files-found: error
+
+  # Android: компиляция и lint Kotlin-кода.
+  # Job запускается только если gradle wrapper уже закоммичен (наличие .jar
+  # проверяется явно — без него gradlew не запустится). После того как Игорь
+  # сгенерирует wrapper локально через `gradle wrapper --gradle-version 8.10.2`
+  # и закоммитит файлы, Android начнёт проверяться автоматически на каждом push.
+  build-android:
+    name: Build Android app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check gradle wrapper exists
+        id: check-wrapper
+        run: |
+          if [ -f gradle/wrapper/gradle-wrapper.jar ] && [ -f gradlew ]; then
+            echo "wrapper-present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "wrapper-present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Gradle wrapper не сгенерирован — Android-сборка пропущена. Сгенерируй локально: gradle wrapper --gradle-version 8.10.2"
+          fi
+      - uses: actions/setup-java@v4
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Setup Gradle cache
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        uses: gradle/actions/setup-gradle@v4
+      - name: Compile Kotlin (debug)
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
+      - name: Lint
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: ./gradlew :app:lintDebug --no-daemon
+        continue-on-error: true
+      - name: Assemble debug APK
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload debug APK
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibefly-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
