@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -45,7 +46,7 @@ import kotlinx.coroutines.launch
 /**
  * Настройки в скевоморфизме iOS 6.
  *
- * Функциональные строки: Agent URL, Auth token, Provider, Demo mode.
+ * Функциональные строки: Demo mode, Agent URL, Auth token, Provider.
  * Placeholder строки в rememberSaveable (без backend): Auto-mode, Throttle,
  * Auto-restart on OOM, Daily backup. Когда фичи появятся в SettingsStore —
  * связь поднимется без правок UI.
@@ -64,6 +65,11 @@ fun SettingsScreen() {
     var throttle by rememberSaveable { mutableStateOf(true) }
     var autoRestartOom by rememberSaveable { mutableStateOf(true) }
     var dailyBackup by rememberSaveable { mutableStateOf(false) }
+
+    // Эти лямбды передаются в GroupedRow.onClick. Если demoMode — null, чтобы
+    // строка стала некликабельной и без chevron.
+    val openUrlDialog: (() -> Unit)? = if (snapshot.demoMode) null else ({ showUrlDialog = true })
+    val openTokenDialog: (() -> Unit)? = if (snapshot.demoMode) null else ({ showTokenDialog = true })
 
     Column(modifier = Modifier.fillMaxSize().linenBackground()) {
         IosNavBar(title = "Settings")
@@ -92,9 +98,8 @@ fun SettingsScreen() {
                     leading = { PhosphorIcon(tint = PhosphorTint.Orange, glyph = "☁") },
                     valueText = if (snapshot.demoMode) "mock://"
                                 else snapshot.baseUrl.removePrefix("http://").removePrefix("https://"),
-                    valueColor = if (snapshot.demoMode) SkeuColors.MutedText else SkeuColors.MutedText,
                     chevron = !snapshot.demoMode,
-                    onClick = if (snapshot.demoMode) null else { -> showUrlDialog = true },
+                    onClick = openUrlDialog,
                 )
                 GroupedDivider()
                 GroupedRow(
@@ -106,7 +111,7 @@ fun SettingsScreen() {
                         else -> "•••• " + snapshot.authToken.takeLast(4)
                     },
                     chevron = !snapshot.demoMode,
-                    onClick = if (snapshot.demoMode) null else { -> showTokenDialog = true },
+                    onClick = openTokenDialog,
                 )
             }
             if (snapshot.demoMode) {
