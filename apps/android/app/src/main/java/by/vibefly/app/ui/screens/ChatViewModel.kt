@@ -42,7 +42,7 @@ class ChatViewModel(
     private val _state = MutableStateFlow(ChatState(messages = initialMessages))
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    private val tools: List<ToolDefinition> = emptyList() // фаза 4 заполнит
+    private val availableTools: List<ToolDefinition> = emptyList() // фаза 4 заполнит
 
     fun send(text: String) {
         if (text.isBlank() || _state.value.sending) return
@@ -59,7 +59,7 @@ class ChatViewModel(
 
         viewModelScope.launch {
             runCatching {
-                ai.chat(_state.value.messages, tools).collect { event ->
+                ai.chat(_state.value.messages, availableTools).collect { event ->
                     handleEvent(event)
                 }
             }.onFailure { t ->
@@ -76,15 +76,15 @@ class ChatViewModel(
                 _state.update { it.copy(pendingText = it.pendingText + event.text) }
             }
             is AiStreamEvent.ToolCalled -> {
-                // Если уже есть Tools-сообщение в pending — добавляем calls в него,
-                // иначе создаём новое. Для простоты сейчас всегда новое.
                 _state.update {
-                    val tools = ChatMessage.Tools(
+                    val toolsMessage = ChatMessage.Tools(
                         intro = "Запускаю инструменты…",
-                        calls = listOf("${event.name}(${event.args.entries.joinToString { "${it.key}=${it.value}" }})"),
+                        calls = listOf(
+                            "${event.name}(${event.args.entries.joinToString { "${it.key}=${it.value}" }})"
+                        ),
                         key = nextKey(),
                     )
-                    it.copy(messages = it.messages + tools)
+                    it.copy(messages = it.messages + toolsMessage)
                 }
             }
             is AiStreamEvent.ApprovalRequested -> {
@@ -104,7 +104,6 @@ class ChatViewModel(
                 _state.update { it.copy(sending = false, error = event.message, pendingText = "") }
             }
             AiStreamEvent.Done -> {
-                // Сбрасываем pendingText в финальный Bot-пузырь
                 _state.update { snap ->
                     val pending = snap.pendingText.trim()
                     val updated = if (pending.isNotEmpty()) {
