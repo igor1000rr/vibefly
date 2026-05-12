@@ -9,12 +9,18 @@ import kotlinx.coroutines.flow.flow
 /**
  * Бизнес-модель приложения в UI-слое. Отвязана от DTO, чтобы API агента можно было
  * эволюционировать без сломки экранов.
+ *
+ * compactLine: чистая строка для Dashboard ("api.tonforge.org · 89 MB"), без порта.
+ * subtitle:    подробная строка для AppDetail ("api.tonforge.org · :3001"), без MB.
+ *
+ * Раздельные поля чтобы оба экрана могли иметь свой формат без if-else в UI.
  */
 data class AppItem(
     val id: String,
     val name: String,
     val status: AppStatus,
     val subtitle: String,
+    val compactLine: String,
     val memoryMb: Int?,
 )
 
@@ -29,15 +35,21 @@ private fun String.toAppStatus(): AppStatus = when (lowercase()) {
 }
 
 private fun AppDto.toItem(): AppItem {
+    val host = domain ?: repo ?: id
     val subtitle = buildString {
-        append(domain ?: repo ?: id)
+        append(host)
         port?.let { append(" \u00B7 :").append(it) }
+    }
+    val compactLine = buildString {
+        append(host)
+        memoryMb?.let { append(" \u00B7 ").append(it).append(" MB") }
     }
     return AppItem(
         id = id,
         name = name,
         status = status.toAppStatus(),
         subtitle = subtitle,
+        compactLine = compactLine,
         memoryMb = memoryMb,
     )
 }
