@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -46,7 +45,7 @@ import kotlinx.coroutines.launch
 /**
  * Настройки в скевоморфизме iOS 6.
  *
- * Функциональные строки: Agent URL, Auth token, Provider.
+ * Функциональные строки: Agent URL, Auth token, Provider, Demo mode.
  * Placeholder строки в rememberSaveable (без backend): Auto-mode, Throttle,
  * Auto-restart on OOM, Daily backup. Когда фичи появятся в SettingsStore —
  * связь поднимется без правок UI.
@@ -78,20 +77,45 @@ fun SettingsScreen() {
             SectionHeader("Connections")
             GroupedTable {
                 GroupedRow(
+                    label = "Demo mode",
+                    leading = { PhosphorIcon(tint = PhosphorTint.Violet, glyph = "★") },
+                    trailing = {
+                        IosToggle(
+                            checked = snapshot.demoMode,
+                            onCheckedChange = { settingsStore.setDemoMode(it) },
+                        )
+                    },
+                )
+                GroupedDivider()
+                GroupedRow(
                     label = "Agent URL",
                     leading = { PhosphorIcon(tint = PhosphorTint.Orange, glyph = "☁") },
-                    valueText = snapshot.baseUrl.removePrefix("http://").removePrefix("https://"),
-                    chevron = true,
-                    onClick = { showUrlDialog = true },
+                    valueText = if (snapshot.demoMode) "mock://"
+                                else snapshot.baseUrl.removePrefix("http://").removePrefix("https://"),
+                    valueColor = if (snapshot.demoMode) SkeuColors.MutedText else SkeuColors.MutedText,
+                    chevron = !snapshot.demoMode,
+                    onClick = if (snapshot.demoMode) null else { -> showUrlDialog = true },
                 )
                 GroupedDivider()
                 GroupedRow(
                     label = "Auth token",
                     leading = { PhosphorIcon(tint = PhosphorTint.Blue, glyph = "●") },
-                    valueText = if (snapshot.authToken.isBlank()) "Not set"
-                                else "•••• " + snapshot.authToken.takeLast(4),
-                    chevron = true,
-                    onClick = { showTokenDialog = true },
+                    valueText = when {
+                        snapshot.demoMode -> "—"
+                        snapshot.authToken.isBlank() -> "Not set"
+                        else -> "•••• " + snapshot.authToken.takeLast(4)
+                    },
+                    chevron = !snapshot.demoMode,
+                    onClick = if (snapshot.demoMode) null else { -> showTokenDialog = true },
+                )
+            }
+            if (snapshot.demoMode) {
+                Text(
+                    text = "Демо-режим: все данные фейковые, сетевые вызовы отключены.",
+                    color = SkeuColors.AccentOrange,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
                 )
             }
 
