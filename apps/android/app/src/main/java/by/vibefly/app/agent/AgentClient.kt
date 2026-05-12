@@ -27,11 +27,15 @@ import kotlinx.serialization.json.Json
 
 /**
  * Ktor-клиент к Go-агенту на 127.0.0.1:3001.
+ *
+ * Реальный transport: HTTP против агента + WebSocket для стриминга логов.
+ * Имя сохранено (AgentClient) для обратной совместимости с пользователями этого класса,
+ * но реально сейчас это имплементация AgentApi.
  */
 class AgentClient(
-    val baseUrl: String = DEFAULT_BASE_URL,
+    override val baseUrl: String = DEFAULT_BASE_URL,
     private val tokenProvider: () -> String? = { null },
-) {
+) : AgentApi {
     private val jsonCodec = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
@@ -61,34 +65,34 @@ class AgentClient(
         }
     }
 
-    suspend fun health(): HealthDto = http.get("$baseUrl/health").body()
+    override suspend fun health(): HealthDto = http.get("$baseUrl/health").body()
 
-    suspend fun systemMetrics(): SystemMetricsDto = http.get("$baseUrl/system").body()
+    override suspend fun systemMetrics(): SystemMetricsDto = http.get("$baseUrl/system").body()
 
-    suspend fun listApps(): List<AppDto> = http.get("$baseUrl/apps").body()
+    override suspend fun listApps(): List<AppDto> = http.get("$baseUrl/apps").body()
 
-    suspend fun getApp(id: String): AppDto = http.get("$baseUrl/apps/$id").body()
+    override suspend fun getApp(id: String): AppDto = http.get("$baseUrl/apps/$id").body()
 
-    suspend fun restartApp(id: String): CommandResultDto =
+    override suspend fun restartApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/restart").body()
 
-    suspend fun stopApp(id: String): CommandResultDto =
+    override suspend fun stopApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/stop").body()
 
-    suspend fun startApp(id: String): CommandResultDto =
+    override suspend fun startApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/start").body()
 
-    suspend fun uninstallApp(id: String): CommandResultDto =
+    override suspend fun uninstallApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id") {
-            // DELETE на стороне агента; эмулируем через method override.
+            // DELETE на стороне агента; эмулируем через method override позже.
         }.body()
 
-    suspend fun recentLogs(id: String, lines: Int = 100): List<LogEntryDto> =
+    override suspend fun recentLogs(id: String, lines: Int): List<LogEntryDto> =
         http.get("$baseUrl/apps/$id/logs") {
             parameter("lines", lines)
         }.body()
 
-    fun streamLogs(id: String): Flow<LogEntryDto> = channelFlow {
+    override fun streamLogs(id: String): Flow<LogEntryDto> = channelFlow {
         val wsUrl = baseUrl
             .replaceFirst("http://", "ws://")
             .replaceFirst("https://", "wss://")
@@ -105,20 +109,20 @@ class AgentClient(
 
     // ===== Marketplace =====
 
-    suspend fun marketplaceList(): List<MarketplaceTemplateDto> =
+    override suspend fun marketplaceList(): List<MarketplaceTemplateDto> =
         http.get("$baseUrl/marketplace").body()
 
-    suspend fun marketplaceGet(id: String): MarketplaceTemplateDto =
+    override suspend fun marketplaceGet(id: String): MarketplaceTemplateDto =
         http.get("$baseUrl/marketplace/$id").body()
 
-    suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
+    override suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
         http.post("$baseUrl/marketplace/$templateId/install") {
             contentType(ContentType.Application.Json)
             setBody(req)
         }
     }
 
-    fun close() {
+    override fun close() {
         http.close()
     }
 

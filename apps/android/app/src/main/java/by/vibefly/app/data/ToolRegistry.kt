@@ -1,6 +1,6 @@
 package by.vibefly.app.data
 
-import by.vibefly.app.agent.AgentClient
+import by.vibefly.app.agent.AgentApi
 import by.vibefly.app.agent.LogEntryDto
 import by.vibefly.app.agent.SystemMetricsDto
 import by.vibefly.app.agent.ToolDefinition
@@ -21,7 +21,7 @@ sealed class ToolResult {
 /**
  * Запись в реестре: описание для AI (function calling JSON) + исполнитель.
  *
- * executor берёт сырые args, валидирует их, дёргает AgentClient, возвращает ToolResult.
+ * executor берёт сырые args, валидирует их, дёргает AgentApi, возвращает ToolResult.
  * Подпись suspend — большинство tool-ов делают сетевой вызов.
  */
 data class RegisteredTool(
@@ -33,18 +33,8 @@ data class RegisteredTool(
  * Реестр инструментов для AI. Регистрирует пары (определение → executor) и выдаёт
  * их по имени. ChatViewModel получает список definitions для запроса к AiClient,
  * а при возврате tool_call дёргает `execute(name, args)`.
- *
- * В фазе 4 список будет расширяться. Пока пять базовых:
- *   • list_apps        — без approval
- *   • get_logs         — без approval
- *   • system_metrics   — без approval
- *   • restart_app      — требует approval (мутирует состояние)
- *   • stop_app         — требует approval
- *
- * Опасные действия (db_migrate, uninstall_app, deploy) добавятся позже когда
- * на стороне агента появятся соответствующие эндпоинты.
  */
-class ToolRegistry(private val agentProvider: () -> AgentClient) {
+class ToolRegistry(private val agentProvider: () -> AgentApi) {
 
     private val tools: Map<String, RegisteredTool> = buildMap {
         register(listAppsTool())
@@ -54,23 +44,17 @@ class ToolRegistry(private val agentProvider: () -> AgentClient) {
         register(stopAppTool())
     }
 
-    /** Все определения для отправки AI. */
     fun definitions(): List<ToolDefinition> = tools.values.map { it.definition }
-
-    /** Известен ли инструмент. Удобно для валидации входящих от AI tool_calls. */
     fun has(name: String): Boolean = tools.containsKey(name)
-
-    /** Требует ли tool явного approval. AI знает это из definition, но валидация безопасности — на нашей стороне. */
     fun requiresApproval(name: String): Boolean = tools[name]?.definition?.requiresApproval ?: false
 
-    /** Выполнить tool. Если такого нет — возвращает Failed (AI получит ошибку и не сможет настаивать). */
     suspend fun execute(name: String, args: Map<String, String>): ToolResult {
         val tool = tools[name] ?: return ToolResult.Failed("Unknown tool: $name")
         return runCatching { tool.executor(args) }
             .getOrElse { t -> ToolResult.Failed(t.localizedMessage ?: t.javaClass.simpleName) }
     }
 
-    // ─── Tool definitions + executors ────────────────────────────────────────
+    // ─── Tool definitions + executors ─────────────────────────────────────────
 
     private fun listAppsTool() = RegisteredTool(
         definition = ToolDefinition(
@@ -83,7 +67,7 @@ class ToolRegistry(private val agentProvider: () -> AgentClient) {
         executor = { _ ->
             val apps = agentProvider().listApps()
             val payload = apps.joinToString(separator = "\n") { a ->
-                "${a.id} status=${a.status} mem=${a.memoryMb ?: "?"}MB domain=${a.domain ?: "—"}"
+                "${a.id} status=${a.status} mem=${a.memoryMb ?: "?"}MB domain=${a.domain ?: "\u2014"}"
             }
             ToolResult.Ok(payload.ifEmpty { "no apps" })
         },
@@ -150,7 +134,7 @@ class ToolRegistry(private val agentProvider: () -> AgentClient) {
             val id = args["app_id"]
                 ?: return@RegisteredTool ToolResult.Failed("app_id is required")
             val result = agentProvider().restartApp(id)
-            ToolResult.Ok("restarted ${result.id} → ${result.status}")
+            ToolResult.Ok("restarted ${result.id} \u2192 ${result.status}")
         },
     )
 
@@ -174,11 +158,11 @@ class ToolRegistry(private val agentProvider: () -> AgentClient) {
             val id = args["app_id"]
                 ?: return@RegisteredTool ToolResult.Failed("app_id is required")
             val result = agentProvider().stopApp(id)
-            ToolResult.Ok("stopped ${result.id} → ${result.status}")
+            ToolResult.Ok("stopped ${result.id} \u2192 ${result.status}")
         },
     )
 
-    // ─── Помощники форматирования ────────────────────────────────────────────
+    // ─── Помощники форматирования ──────────────────────────────────────────
 
     private fun formatLogs(logs: List<LogEntryDto>): String {
         if (logs.isEmpty()) return "no log entries"
@@ -189,7 +173,7 @@ class ToolRegistry(private val agentProvider: () -> AgentClient) {
 
     private fun formatMetrics(m: SystemMetricsDto): String = buildString {
         append("battery=${m.batteryLevel}% (${m.batteryStatus}); ")
-        append("temp=${m.temperatureC}°C; ")
+        append("temp=${m.temperatureC}\u00B0C; ")
         append("cpu=${m.cpuPercent}%; ")
         append("ram=${m.ramUsedMb}/${m.ramTotalMb}MB; ")
         append("uptime=${m.uptimeSeconds}s")

@@ -12,11 +12,11 @@ import kotlinx.coroutines.flow.asStateFlow
  * Преференсы приложения.
  *
  * Секреты (auth token, future API keys) хранятся в EncryptedSharedPreferences
- * поверх AndroidX Security. Базовый URL — в обычных SharedPreferences,
- * потому что это не секрет.
+ * поверх AndroidX Security. Базовый URL и флаги — в обычных SharedPreferences,
+ * потому что это не секреты.
  *
  * Состояние выставляется как StateFlow, чтобы ServiceLocator мог реактивно
- * пересобирать AgentClient при смене хоста/токена.
+ * пересобирать AgentApi при смене хоста/токена/demo-mode.
  */
 class SettingsStore(context: Context) {
 
@@ -43,6 +43,11 @@ class SettingsStore(context: Context) {
         refresh()
     }
 
+    fun setDemoMode(enabled: Boolean) {
+        plain.edit().putBoolean(KEY_DEMO_MODE, enabled).apply()
+        refresh()
+    }
+
     private fun refresh() {
         _state.value = read()
     }
@@ -53,12 +58,14 @@ class SettingsStore(context: Context) {
         aiProvider = runCatching {
             AiProvider.valueOf(plain.getString(KEY_AI_PROVIDER, AiProvider.Llama.name) ?: AiProvider.Llama.name)
         }.getOrDefault(AiProvider.Llama),
+        demoMode = plain.getBoolean(KEY_DEMO_MODE, false),
     )
 
     data class Snapshot(
         val baseUrl: String,
         val authToken: String,
         val aiProvider: AiProvider,
+        val demoMode: Boolean,
     )
 
     enum class AiProvider(val displayName: String) {
@@ -78,6 +85,7 @@ class SettingsStore(context: Context) {
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_AI_PROVIDER = "ai_provider"
+        private const val KEY_DEMO_MODE = "demo_mode"
 
         private fun createSecure(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)

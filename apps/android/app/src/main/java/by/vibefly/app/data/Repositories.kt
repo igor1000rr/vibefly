@@ -1,6 +1,6 @@
 package by.vibefly.app.data
 
-import by.vibefly.app.agent.AgentClient
+import by.vibefly.app.agent.AgentApi
 import by.vibefly.app.agent.AppDto
 import by.vibefly.app.agent.SystemMetricsDto
 import kotlinx.coroutines.flow.Flow
@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.flow
  *
  * compactLine: чистая строка для Dashboard ("api.tonforge.org · 89 MB"), без порта.
  * subtitle:    подробная строка для AppDetail ("api.tonforge.org · :3001"), без MB.
- *
- * Раздельные поля чтобы оба экрана могли иметь свой формат без if-else в UI.
  */
 data class AppItem(
     val id: String,
@@ -55,9 +53,9 @@ private fun AppDto.toItem(): AppItem {
 }
 
 /**
- * AppsRepository — фасад над AgentClient для экранов.
+ * AppsRepository — фасад над AgentApi для экранов.
  */
-class AppsRepository(private val client: AgentClient) {
+class AppsRepository(private val client: AgentApi) {
 
     suspend fun list(): List<AppItem> = client.listApps().map { it.toItem() }
 
@@ -71,7 +69,7 @@ class AppsRepository(private val client: AgentClient) {
 /**
  * SystemRepository — метрики устройства.
  */
-class SystemRepository(private val client: AgentClient) {
+class SystemRepository(private val client: AgentApi) {
 
     suspend fun snapshot(): SystemMetricsDto = client.systemMetrics()
 
