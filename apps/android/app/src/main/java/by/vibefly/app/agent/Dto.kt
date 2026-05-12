@@ -13,6 +13,8 @@ data class HealthDto(
     val status: String,
     val version: String,
     val time: String,
+    @SerialName("supervisor_available") val supervisorAvailable: Boolean = false,
+    @SerialName("tunnel_available") val tunnelAvailable: Boolean = false,
 )
 
 @Serializable
@@ -62,4 +64,19 @@ data class LogEntryDto(
     val level: String,
     val source: String,
     val message: String,
+)
+
+/**
+ * Статус публичного туннеля. Зеркальный type для apps/agent/internal/tunnel.Status.
+ *
+ * Provider — "none" / "trycloudflare" / "named". На текущей фазе всегда
+ * "trycloudflare" когда включён, "none" когда manager не настроен.
+ */
+@Serializable
+data class TunnelStatusDto(
+    val active: Boolean = false,
+    @SerialName("public_url") val publicUrl: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    val provider: String = "none",
+    @SerialName("last_error") val lastError: String? = null,
 )

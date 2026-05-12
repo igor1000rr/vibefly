@@ -6,8 +6,8 @@ import kotlinx.coroutines.flow.Flow
  * Публичный API агента с точки зрения Android-клиента.
  *
  * Две реализации:
- *  • RemoteAgentClient — ходит в Go-агент по HTTP/WebSocket
- *  • MockAgentClient   — возвращает хардкоженные demo-данные, без сети
+ *  • AgentClient     — ходит в Go-агент по HTTP/WebSocket
+ *  • MockAgentClient — возвращает хардкоженные demo-данные, без сети
  *
  * Интерфейс держит все исходящие вызовы к агенту — ToolRegistry, AppsRepository,
  * SystemRepository, MarketplaceRepository упираются именно в этот интерфейс, не в класс.
@@ -31,6 +31,11 @@ interface AgentApi {
     suspend fun marketplaceList(): List<MarketplaceTemplateDto>
     suspend fun marketplaceGet(id: String): MarketplaceTemplateDto
     suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest)
+
+    /** Публичный туннель (Cloudflare). */
+    suspend fun tunnelStatus(): TunnelStatusDto
+    suspend fun tunnelStart(): TunnelStatusDto
+    suspend fun tunnelStop(): TunnelStatusDto
 
     /** Закрыть все сетевые ресурсы. Неидемпотентно — повторные вызовы игнорируются. */
     fun close()

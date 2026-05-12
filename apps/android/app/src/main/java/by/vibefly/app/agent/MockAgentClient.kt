@@ -6,14 +6,10 @@ import kotlinx.coroutines.flow.flow
 
 /**
  * MockAgentClient — возвращает хардкоженные demo-данные без сети. Предназначен
- * для демо/каталога/скриншотов и для случаев когда агент ещё не развёрнут (rootfs
- * не в комплекте APK в фазе 1).
+ * для демо/каталога/скриншотов и для случаев когда агент ещё не развёрнут.
  *
- * Переключается в SettingsStore.demoMode = true. Данные подобраны так, чтобы экраны
- * выглядели как на мокапах (amina-bot работает, azcrm-staging деплоится и т.д.).
- *
- * Команды restart/stop/start/install обновляют внутреннее состояние, чтобы UI
- * вел себя правдоподобно (toggle дёрнул — статус стал stopped).
+ * Переключается в SettingsStore.demoMode = true. Команды restart/stop/start/install/tunnel
+ * обновляют внутреннее состояние, чтобы UI вел себя правдоподобно.
  */
 class MockAgentClient : AgentApi {
 
@@ -71,9 +67,20 @@ class MockAgentClient : AgentApi {
         ),
     )
 
+    // Mock state туннеля. Когда пользователь нажимает Start — ждём пару секунд и
+    // выдаём фейковый trycloudflare URL, чтобы было похоже на реальный сценарий.
+    @Volatile
+    private var tunnel: TunnelStatusDto = TunnelStatusDto(provider = "trycloudflare")
+
     override suspend fun health(): HealthDto {
         simulateLatency()
-        return HealthDto(status = "ok", version = "demo-0.3", time = nowIso())
+        return HealthDto(
+            status = "ok",
+            version = "demo-0.4",
+            time = nowIso(),
+            supervisorAvailable = false,
+            tunnelAvailable = true,
+        )
     }
 
     override suspend fun systemMetrics(): SystemMetricsDto {
@@ -117,12 +124,8 @@ class MockAgentClient : AgentApi {
     }
 
     override fun streamLogs(id: String): Flow<LogEntryDto> = flow {
-        // Эмитируем по одной строке раз в секунду для живого эффекта.
         val backlog = demoLogs(id)
-        backlog.forEach { entry ->
-            emit(entry)
-        }
-        // После backlog — медленный ритм новых событий.
+        backlog.forEach { entry -> emit(entry) }
         var tick = 0
         while (true) {
             delay(1_500)
@@ -150,7 +153,7 @@ class MockAgentClient : AgentApi {
     }
 
     override suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
-        simulateLatency(800) // для эффекта deploy'инга
+        simulateLatency(800)
         val template = marketplaceGet(templateId)
         apps.add(
             AppDto(
@@ -166,6 +169,33 @@ class MockAgentClient : AgentApi {
                 lastDeploy = nowIso(),
             )
         )
+    }
+
+    // ===== Tunnel =====
+
+    override suspend fun tunnelStatus(): TunnelStatusDto {
+        simulateLatency()
+        return tunnel
+    }
+
+    override suspend fun tunnelStart(): TunnelStatusDto {
+        if (tunnel.active) return tunnel
+        // Имитируем cloudflared startup — пару секунд.
+        delay(2_500)
+        tunnel = TunnelStatusDto(
+            active = true,
+            publicUrl = "https://mock-quick-tunnel-demo.trycloudflare.com",
+            startedAt = nowIso(),
+            provider = "trycloudflare",
+        )
+        return tunnel
+    }
+
+    override suspend fun tunnelStop(): TunnelStatusDto {
+        if (!tunnel.active) return tunnel
+        delay(400)
+        tunnel = TunnelStatusDto(provider = "trycloudflare")
+        return tunnel
     }
 
     override fun close() {
@@ -189,11 +219,7 @@ class MockAgentClient : AgentApi {
 
     private suspend fun simulateLatency(ms: Long = 120) = delay(ms)
 
-    private fun nowIso(): String {
-        // Не тянем полный ISO с timezone — нам нужен формат для UI, не для бэка.
-        // Просто прилепим millis поверх фиксированной даты.
-        return "2026-05-12T06:50:00Z"
-    }
+    private fun nowIso(): String = "2026-05-12T06:50:00Z"
 
     private fun demoLogs(appId: String): List<LogEntryDto> {
         val base = "2026-05-12T06:4"

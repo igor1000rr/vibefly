@@ -26,11 +26,9 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.Json
 
 /**
- * Ktor-клиент к Go-агенту на 127.0.0.1:3001.
+ * Ktor-клиент к Go-агенту на 127.0.0.1:3001 (или публичному хосту).
  *
  * Реальный transport: HTTP против агента + WebSocket для стриминга логов.
- * Имя сохранено (AgentClient) для обратной совместимости с пользователями этого класса,
- * но реально сейчас это имплементация AgentApi.
  */
 class AgentClient(
     override val baseUrl: String = DEFAULT_BASE_URL,
@@ -46,9 +44,11 @@ class AgentClient(
         install(ContentNegotiation) { json(jsonCodec) }
         install(WebSockets)
         install(HttpTimeout) {
-            requestTimeoutMillis = 5_000
-            connectTimeoutMillis = 2_000
-            socketTimeoutMillis = 5_000
+            // tunnel/start может ждать до 60с cloudflared startup,
+            // поэтому request timeout высокий.
+            requestTimeoutMillis = 90_000
+            connectTimeoutMillis = 5_000
+            socketTimeoutMillis = 90_000
         }
         install(HttpRequestRetry) {
             retryOnExceptionIf(maxRetries = 2) { _, cause ->
@@ -66,26 +66,18 @@ class AgentClient(
     }
 
     override suspend fun health(): HealthDto = http.get("$baseUrl/health").body()
-
     override suspend fun systemMetrics(): SystemMetricsDto = http.get("$baseUrl/system").body()
-
     override suspend fun listApps(): List<AppDto> = http.get("$baseUrl/apps").body()
-
     override suspend fun getApp(id: String): AppDto = http.get("$baseUrl/apps/$id").body()
 
     override suspend fun restartApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/restart").body()
-
     override suspend fun stopApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/stop").body()
-
     override suspend fun startApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/start").body()
-
     override suspend fun uninstallApp(id: String): CommandResultDto =
-        http.post("$baseUrl/apps/$id") {
-            // DELETE на стороне агента; эмулируем через method override позже.
-        }.body()
+        http.post("$baseUrl/apps/$id").body()
 
     override suspend fun recentLogs(id: String, lines: Int): List<LogEntryDto> =
         http.get("$baseUrl/apps/$id/logs") {
@@ -121,6 +113,17 @@ class AgentClient(
             setBody(req)
         }
     }
+
+    // ===== Tunnel =====
+
+    override suspend fun tunnelStatus(): TunnelStatusDto =
+        http.get("$baseUrl/tunnel").body()
+
+    override suspend fun tunnelStart(): TunnelStatusDto =
+        http.post("$baseUrl/tunnel/start").body()
+
+    override suspend fun tunnelStop(): TunnelStatusDto =
+        http.post("$baseUrl/tunnel/stop").body()
 
     override fun close() {
         http.close()
