@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import by.vibefly.app.ui.components.ApprovalCard
@@ -54,8 +54,8 @@ import by.vibefly.app.ui.theme.SkeuGradients
  *
  * Полная интеграция с tool-calling и реальным AI — фаза 4. Сейчас:
  *  • UI готов целиком (пузыри, tool calls, approval, input bar)
- *  • Лента наполнена demo-сообщениями из мокапа, чтобы видеть стиль
- *  • Send добавляет сообщение в локальный список (без backend)
+ *  • Лента наполнена demo-сообщениями из мокапа
+ *  • Send добавляет сообщение в локальный список + эхо-ответ (без backend)
  */
 @Composable
 fun ChatScreen() {
@@ -98,7 +98,6 @@ fun ChatScreen() {
                 if (text.isNotEmpty()) {
                     messages.add(ChatMessage.User(text = text, key = nextKey()))
                     input = ""
-                    // Заглушка: эхо-бот ответит через 0 сообщений (фаза 4 заменит на AI).
                     messages.add(
                         ChatMessage.Bot(
                             text = "Принял. AI-ассистент включится в фазе 4 — пока я только UI.",
@@ -112,8 +111,9 @@ fun ChatScreen() {
 }
 
 /**
- * Кастомный nav bar для чата — фиолетовый аватар + двухстрочный title + кнопки ≡ и i.
- * Не использует общий IosNavBar потому что у него специфичная центральная область.
+ * Nav bar чата. Три слота в Row:
+ *  [≡]        [✦ Vibe AI / online]        [i]
+ * Title centered через weight=1f + horizontalArrangement.Center в Column.
  */
 @Composable
 private fun ChatNavBar(
@@ -122,7 +122,7 @@ private fun ChatNavBar(
     onMenu: () -> Unit,
     onInfo: () -> Unit,
 ) {
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(50.dp)
@@ -134,12 +134,16 @@ private fun ChatNavBar(
                     end = Offset(size.width, size.height - 0.5f),
                     strokeWidth = 1f,
                 )
-            },
+            }
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Центрированный двухстрочный заголовок с аватаром
+        CircleNavButton(text = "≡", onClick = onMenu, fontSize = 16.sp)
+
         Row(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
         ) {
             Box(
                 modifier = Modifier
@@ -184,18 +188,7 @@ private fun ChatNavBar(
             }
         }
 
-        // Левая кнопка ≡
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-                .align(Alignment.Center),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            CircleNavButton(text = "≡", onClick = onMenu, fontSize = 16.sp)
-            CircleNavButton(text = "i", onClick = onInfo, fontSize = 11.sp)
-        }
+        CircleNavButton(text = "i", onClick = onInfo, fontSize = 11.sp)
     }
 }
 
@@ -203,7 +196,7 @@ private fun ChatNavBar(
 private fun CircleNavButton(
     text: String,
     onClick: () -> Unit,
-    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontSize: TextUnit,
 ) {
     Box(
         modifier = Modifier
