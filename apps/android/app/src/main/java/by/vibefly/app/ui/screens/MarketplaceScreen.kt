@@ -25,11 +25,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -256,17 +255,21 @@ private fun InstallDialog(
     onCancel: () -> Unit,
     onConfirm: (Map<String, String>) -> Unit,
 ) {
-    // Состояние полей — каждое инициализируется default-значением.
+    // Состояние полей — каждое инициализируется default-значением. SnapshotStateMap
+    // отслеживает изменения, поэтому derivedStateOf ниже реагирует автоматически.
     val values = remember(template.id) {
         mutableStateMapOf<String, String>().apply {
-            template.envSchema.forEach { f ->
-                put(f.key, f.default.orEmpty())
-            }
+            template.envSchema.forEach { f -> put(f.key, f.default.orEmpty()) }
         }
     }
 
+    // Список labels required-полей, которые сейчас пусты. Пересчитывается лениво.
     val missingRequired by remember(template.id) {
-        derivedStateOf(values, template.envSchema)
+        derivedStateOf {
+            template.envSchema
+                .filter { it.required && values[it.key].isNullOrBlank() }
+                .map { it.label }
+        }
     }
 
     AlertDialog(
@@ -362,7 +365,7 @@ private fun EnvFieldEditor(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            placeholder = field.placeholder?.let { { Text(it, fontSize = 12.sp) } },
+            placeholder = field.placeholder?.let { ph -> { Text(ph, fontSize = 12.sp) } },
             singleLine = true,
             visualTransformation = if (field.secret) PasswordVisualTransformation()
                                    else VisualTransformation.None,
@@ -371,19 +374,5 @@ private fun EnvFieldEditor(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-    }
-}
-
-/**
- * Возвращает список ключей required-полей, которые пустые. Если список пуст —
- * install кнопка активна.
- */
-@Composable
-private fun derivedStateOf(
-    values: Map<String, String>,
-    schema: List<MarketplaceEnvFieldDto>,
-): androidx.compose.runtime.State<List<String>> = androidx.compose.runtime.remember(values, schema) {
-    androidx.compose.runtime.derivedStateOf {
-        schema.filter { it.required && values[it.key].isNullOrBlank() }.map { it.label }
     }
 }
