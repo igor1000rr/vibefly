@@ -1,6 +1,7 @@
 package by.vibefly.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,12 +26,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,7 +61,7 @@ import by.vibefly.app.ui.theme.SkeuGradients
  *
  * Структура:
  *  • Nav bar (‹ Apps, <name>, Edit)
- *  • Hero (иконка + name + subtitle + Running pill)
+ *  • Hero (иконка + name + subtitle + Status pill)
  *  • SegmentedControl: Overview / Logs / Env / Deploys
  *  • Содержимое таба (grouped tables либо тёмная консоль логов)
  *  • Нижняя строка действий: Restart (glossy) + Redeploy (primary)
@@ -108,7 +109,6 @@ fun AppDetailScreen(
             }
         }
 
-        // Нижняя строка действий — всегда на дне экрана.
         BottomActions(
             onRestart = viewModel::restart,
             onRedeploy = { /* TODO: deploy hook */ },
@@ -163,19 +163,55 @@ private fun Hero(app: AppDto) {
     }
 }
 
+/**
+ * Статусная "пилюля" с градиентом, тонким бордером и иконкой-индикатором.
+ */
+private data class StatusPillStyle(
+    val label: String,
+    val brush: Brush,
+    val stroke: Color,
+)
+
 @Composable
 private fun StatusPill(status: String) {
-    val (label, brush, stroke) = when (status.lowercase()) {
-        "running" -> Triple("Running", SkeuGradients.toggleOn(), SkeuColors.ToggleOnStroke)
-        "stopped" -> Triple("Stopped", SkeuGradients.glossyGrayButton(), SkeuColors.GlossyGrayStroke)
-        "deploying" -> Triple("Deploying", SkeuGradients.phosphor(SkeuColors.PhosphorAmberTop, SkeuColors.PhosphorAmberBottom), SkeuColors.PhosphorAmberBottom)
-        "failed" -> Triple("Failed", SkeuGradients.phosphor(SkeuColors.PhosphorRedTop, SkeuColors.PhosphorRedBottom), SkeuColors.PhosphorRedBottom)
-        else -> Triple(status, SkeuGradients.glossyGrayButton(), SkeuColors.GlossyGrayStroke)
+    val style = when (status.lowercase()) {
+        "running" -> StatusPillStyle(
+            label = "Running",
+            brush = SkeuGradients.toggleOn(),
+            stroke = SkeuColors.ToggleOnStroke,
+        )
+        "stopped" -> StatusPillStyle(
+            label = "Stopped",
+            brush = SkeuGradients.glossyGrayButton(),
+            stroke = SkeuColors.GlossyGrayStroke,
+        )
+        "deploying" -> StatusPillStyle(
+            label = "Deploying",
+            brush = SkeuGradients.phosphor(
+                SkeuColors.PhosphorAmberTop,
+                SkeuColors.PhosphorAmberBottom,
+            ),
+            stroke = SkeuColors.PhosphorAmberBottom,
+        )
+        "failed" -> StatusPillStyle(
+            label = "Failed",
+            brush = SkeuGradients.phosphor(
+                SkeuColors.PhosphorRedTop,
+                SkeuColors.PhosphorRedBottom,
+            ),
+            stroke = SkeuColors.PhosphorRedBottom,
+        )
+        else -> StatusPillStyle(
+            label = status,
+            brush = SkeuGradients.glossyGrayButton(),
+            stroke = SkeuColors.GlossyGrayStroke,
+        )
     }
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(brush)
+            .background(style.brush)
+            .border(1.dp, style.stroke, RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -187,13 +223,12 @@ private fun StatusPill(status: String) {
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = label,
+            text = style.label,
             color = Color.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
         )
     }
-    @Suppress("UNUSED_EXPRESSION") stroke // оставлено для будущего border'а
 }
 
 private fun heroTint(status: String): PhosphorTint = when (status.lowercase()) {
@@ -259,7 +294,7 @@ private fun OverviewTab(app: AppDto?) {
             GroupedDivider()
             GroupedRow(
                 label = "Repository",
-                valueText = app?.repo?.take(20) ?: "—",
+                valueText = app?.repo?.takeLastShort() ?: "—",
                 chevron = true,
                 onClick = { /* TODO: open in browser */ },
             )
@@ -268,10 +303,17 @@ private fun OverviewTab(app: AppDto?) {
     }
 }
 
+/**
+ * Обрезает "owner/repo" до короткой формы для grouped row справа.
+ * "antsincgame/Amina-bot" -> "antsincgame/Am…"
+ */
+private fun String.takeLastShort(maxLen: Int = 18): String =
+    if (length <= maxLen) this else take(maxLen - 1) + "…"
+
 private fun humanizeUptime(startedAt: String?): String {
     if (startedAt.isNullOrEmpty()) return "—"
-    // ISO timestamp как "2026-05-08T03:58:00Z" — не парсим тут полноценно, просто
-    // показываем дату. Аккуратная локализация Duration придёт в фазе 2.
+    // ISO timestamp "2026-05-08T03:58:00Z" — показываем дату; полная локализация
+    // Duration придёт в фазе 2 с DateTimeFormatter.
     return startedAt.take(10)
 }
 
@@ -318,7 +360,8 @@ private fun LogsConsole(logs: List<LogEntryDto>, modifier: Modifier = Modifier) 
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF0A0A0A)),
+            .background(Color(0xFF0A0A0A))
+            .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)),
     ) {
         if (logs.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
