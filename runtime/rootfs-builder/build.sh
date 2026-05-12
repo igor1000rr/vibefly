@@ -120,8 +120,29 @@ stage_node() {
   '
 }
 
+stage_cloudflared() {
+  # cloudflared — обязательный бинарь для публичного tunnel'а. Агент запускает
+  # его по POST /tunnel/start, поэтому без него ingress не работает. Ставим
+  # из официального Cloudflare apt-репо (свежие версии, GPG-подпись их).
+  log "stage 4: cloudflared из официального Cloudflare apt-репо"
+
+  chroot "${ROOTFS_DIR}" bash -euxc "
+    export DEBIAN_FRONTEND=noninteractive
+    mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+      | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared ${SUITE} main' \
+      > /etc/apt/sources.list.d/cloudflared.list
+    apt-get update
+    apt-get install -y --no-install-recommends cloudflared
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    cloudflared --version
+  "
+}
+
 stage_agent() {
-  log "stage 4: агент + systemd unit"
+  log "stage 5: агент + systemd unit"
 
   install -d -m 0755 "${ROOTFS_DIR}/etc/vibefly"
   install -d -m 0755 "${ROOTFS_DIR}/var/lib/vibefly/apps"
@@ -143,7 +164,7 @@ stage_agent() {
 }
 
 stage_finalize() {
-  log "stage 5: финальный cleanup"
+  log "stage 6: финальный cleanup"
   chroot "${ROOTFS_DIR}" bash -euxc '
     rm -rf /var/cache/apt/* /var/lib/apt/lists/* /var/log/*.log /tmp/*
     apt-get autoremove -y --purge
@@ -152,7 +173,7 @@ stage_finalize() {
 }
 
 stage_pack() {
-  log "stage 6: упаковка в ext4 + zstd"
+  log "stage 7: упаковка в ext4 + zstd"
   cleanup  # размапим перед mkfs
 
   rm -f "${IMG_FILE}"
@@ -174,6 +195,7 @@ main() {
   stage_debootstrap
   stage_packages
   stage_node
+  stage_cloudflared
   stage_agent
   stage_finalize
   stage_pack

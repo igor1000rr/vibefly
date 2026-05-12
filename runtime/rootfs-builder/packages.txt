@@ -46,5 +46,6 @@ nginx-light
 # redis-server — тоже опционально.
 
 # Tunnel + VPN.
-# cloudflared — ставится из их .deb позднее в build.sh.
-# tailscale — ставится из их repo позднее.
+# cloudflared ставится отдельно в build.sh:stage_cloudflared (из официального
+# Cloudflare apt-репо), т.к. его нет в Debian main.
+# tailscale — тоже позже из их repo, когда добавим P2P-режим.
