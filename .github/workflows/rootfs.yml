@@ -40,11 +40,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y debootstrap qemu-user-static binfmt-support zstd e2fsprogs
 
+      # Выставляем +x на скрипты на случай если коммит прошёл через GitHub web/API
+      # без сохранения executable bit (MCP create_or_update_file именно так делает).
+      - name: Ensure scripts are executable
+        run: chmod +x runtime/rootfs-builder/build.sh
+
       - name: Build rootfs
         env:
           AGENT_BIN: ${{ github.workspace }}/apps/agent/bin/vibefly-agent-arm64
         run: |
-          sudo -E ./runtime/rootfs-builder/build.sh
+          sudo -E bash ./runtime/rootfs-builder/build.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
