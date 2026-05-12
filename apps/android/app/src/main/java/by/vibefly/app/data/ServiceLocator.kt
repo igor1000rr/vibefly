@@ -24,6 +24,13 @@ object ServiceLocator {
     private val _agentClient = MutableStateFlow<AgentClient?>(null)
     val agentClient: StateFlow<AgentClient?> = _agentClient.asStateFlow()
 
+    /**
+     * ToolRegistry создаётся один раз и хранит замыкание на `agent()` — поэтому
+     * после смены настроек его пересоздавать не надо: при следующем execute()
+     * он возьмёт уже обновлённого клиента.
+     */
+    private val toolRegistry: ToolRegistry by lazy { ToolRegistry { agent() } }
+
     fun init(app: Application) {
         if (this::appContext.isInitialized) return
         appContext = app
@@ -51,4 +58,5 @@ object ServiceLocator {
 
     fun apps(): AppsRepository = AppsRepository(agent())
     fun system(): SystemRepository = SystemRepository(agent())
+    fun tools(): ToolRegistry = toolRegistry
 }
