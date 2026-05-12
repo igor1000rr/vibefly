@@ -46,6 +46,7 @@ import by.vibefly.app.ui.components.BubbleBot
 import by.vibefly.app.ui.components.BubbleUser
 import by.vibefly.app.ui.components.ChatInputBar
 import by.vibefly.app.ui.components.ChatTimeSeparator
+import by.vibefly.app.ui.components.InDevelopmentBanner
 import by.vibefly.app.ui.components.ToolCallBubble
 import by.vibefly.app.ui.components.notebookBackground
 import by.vibefly.app.ui.theme.SkeuColors
@@ -54,11 +55,10 @@ import by.vibefly.app.ui.theme.SkeuGradients
 /**
  * Vibe AI — экран чата с AI-ассистентом сервера.
  *
- * Полная интеграция с tool-calling и реальным AI — фаза 4. Сейчас:
- *  • UI готов целиком (пузыри, tool calls, approval, input bar)
- *  • ChatViewModel со StubAiClient выдаёт echo-ответы посимвольным стримом
- *  • При rotation история чата сохраняется (живёт в ViewModel)
- *  • Approval.apply пока заглушка — реальный tool call появится в фазе 4
+ * UI и оркестратор готовы (пузыри, tool calls, approval, input bar, стрим),
+ * подключение к реальному AI пока не активно — поэтому раздел помечен
+ * InDevelopmentBanner. После замены StubAiClient на CloudflareProxyAiClient
+ * (фаза 4) плашка снимется.
  */
 @Composable
 fun ChatScreen(
@@ -80,6 +80,7 @@ fun ChatScreen(
             onMenu = { /* TODO: open side menu */ },
             onInfo = { /* TODO: info sheet */ },
         )
+        InDevelopmentBanner(text = "Vibe AI · в разработке")
 
         LazyColumn(
             state = listState,
@@ -93,7 +94,6 @@ fun ChatScreen(
             items(state.messages, key = { it.key }) { msg ->
                 RenderMessage(msg, onApply = viewModel::applyApproval)
             }
-            // Pending pузырь от AI — растёт по буквам, без key (одиночный)
             if (state.pendingText.isNotEmpty()) {
                 item(key = "pending") {
                     BubbleBot(text = state.pendingText.trim() + "▍")
