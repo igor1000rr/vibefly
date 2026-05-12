@@ -23,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,6 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import by.vibefly.app.agent.ChatMessage
 import by.vibefly.app.ui.components.ApprovalCard
 import by.vibefly.app.ui.components.BubbleBot
 import by.vibefly.app.ui.components.BubbleUser
@@ -54,24 +56,28 @@ import by.vibefly.app.ui.theme.SkeuGradients
  *
  * Полная интеграция с tool-calling и реальным AI — фаза 4. Сейчас:
  *  • UI готов целиком (пузыри, tool calls, approval, input bar)
- *  • Лента наполнена demo-сообщениями из мокапа
- *  • Send добавляет сообщение в локальный список + эхо-ответ (без backend)
+ *  • ChatViewModel со StubAiClient выдаёт echo-ответы посимвольным стримом
+ *  • При rotation история чата сохраняется (живёт в ViewModel)
+ *  • Approval.apply пока заглушка — реальный tool call появится в фазе 4
  */
 @Composable
-fun ChatScreen() {
-    val messages = remember { mutableStateListOf<ChatMessage>().apply { addAll(demoMessages()) } }
+fun ChatScreen(
+    viewModel: ChatViewModel = viewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
 
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    LaunchedEffect(state.messages.size, state.pendingText) {
+        val total = state.messages.size + (if (state.pendingText.isNotEmpty()) 1 else 0)
+        if (total > 0) listState.animateScrollToItem(total - 1)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(SkeuColors.NotebookPaper)) {
         ChatNavBar(
             title = "Vibe AI",
-            subtitle = "online",
-            onMenu = { /* TODO: открыть боковое меню */ },
+            subtitle = if (state.sending) "typing…" else "online",
+            onMenu = { /* TODO: open side menu */ },
             onInfo = { /* TODO: info sheet */ },
         )
 
@@ -84,10 +90,16 @@ fun ChatScreen() {
                 .padding(horizontal = 10.dp),
             verticalArrangement = Arrangement.Top,
         ) {
-            items(messages, key = { it.key }) { msg ->
-                RenderMessage(msg)
+            items(state.messages, key = { it.key }) { msg ->
+                RenderMessage(msg, onApply = viewModel::applyApproval)
             }
-            item { Spacer(modifier = Modifier.height(8.dp)) }
+            // Pending pузырь от AI — растёт по буквам, без key (одиночный)
+            if (state.pendingText.isNotEmpty()) {
+                item(key = "pending") {
+                    BubbleBot(text = state.pendingText.trim() + "▍")
+                }
+            }
+            item(key = "tail-spacer") { Spacer(modifier = Modifier.height(8.dp)) }
         }
 
         ChatInputBar(
@@ -96,14 +108,8 @@ fun ChatScreen() {
             onSend = {
                 val text = input.trim()
                 if (text.isNotEmpty()) {
-                    messages.add(ChatMessage.User(text = text, key = nextKey()))
+                    viewModel.send(text)
                     input = ""
-                    messages.add(
-                        ChatMessage.Bot(
-                            text = "Принял. AI-ассистент включится в фазе 4 — пока я только UI.",
-                            key = nextKey(),
-                        )
-                    )
                 }
             },
         )
@@ -111,9 +117,7 @@ fun ChatScreen() {
 }
 
 /**
- * Nav bar чата. Три слота в Row:
- *  [≡]        [✦ Vibe AI / online]        [i]
- * Title centered через weight=1f + horizontalArrangement.Center в Column.
+ * Nav bar чата. Три слота в Row: [≡]  [✦ Vibe AI / online]  [i].
  */
 @Composable
 private fun ChatNavBar(
@@ -235,10 +239,13 @@ private fun CircleNavButton(
     }
 }
 
-// ─── Рендер сообщений ────────────────────────────────────────────────────────
+// ─── Рендер сообщений ───────────────────────────────────────────────────────
 
 @Composable
-private fun RenderMessage(msg: ChatMessage) {
+private fun RenderMessage(
+    msg: ChatMessage,
+    onApply: (ChatMessage.Approval) -> Unit,
+) {
     when (msg) {
         is ChatMessage.TimeMarker -> ChatTimeSeparator(text = msg.text)
         is ChatMessage.Bot -> BubbleBot(text = msg.text)
@@ -248,56 +255,8 @@ private fun RenderMessage(msg: ChatMessage) {
             title = msg.title,
             code = msg.code,
             description = msg.description,
-            onApply = { /* TODO: вызвать tool */ },
-            onPreview = { /* TODO: показать полный SQL */ },
+            onApply = { onApply(msg) },
+            onPreview = { /* TODO: show full SQL/diff */ },
         )
     }
 }
-
-// ─── Модель сообщения ────────────────────────────────────────────────────────
-
-private var keyCounter: Long = 1_000L
-private fun nextKey(): Long = ++keyCounter
-
-sealed class ChatMessage {
-    abstract val key: Long
-
-    data class TimeMarker(val text: String, override val key: Long) : ChatMessage()
-    data class Bot(val text: String, override val key: Long) : ChatMessage()
-    data class User(val text: String, override val key: Long) : ChatMessage()
-    data class Tools(val intro: String, val calls: List<String>, override val key: Long) : ChatMessage()
-    data class Approval(
-        val title: String,
-        val code: String,
-        val description: String,
-        override val key: Long,
-    ) : ChatMessage()
-}
-
-private fun demoMessages(): List<ChatMessage> = listOf(
-    ChatMessage.TimeMarker("сегодня · 9:38", nextKey()),
-    ChatMessage.Bot("Ом мане падме хунг.", nextKey()),
-    ChatMessage.Bot("Я Vibe AI — ассистент твоего сервера. С чего начнём?", nextKey()),
-    ChatMessage.TimeMarker("9:41", nextKey()),
-    ChatMessage.User("У меня лагает azcrm последние полчаса", nextKey()),
-    ChatMessage.User("Глянь, что не так", nextKey()),
-    ChatMessage.Tools(
-        intro = "Смотрю логи, метрики и медленные запросы…",
-        calls = listOf(
-            "get_logs(azcrm, 30m)",
-            "query_metrics(cpu, ram)",
-            "db_query(slow)",
-        ),
-        key = nextKey(),
-    ),
-    ChatMessage.Bot(
-        "Таблица messages разрослась до 2.4M строк. Нет индекса по created_at — пагинация делает full scan.",
-        nextKey(),
-    ),
-    ChatMessage.Approval(
-        title = "⚒ предлагаю миграцию",
-        code = "CREATE INDEX CONCURRENTLY\nidx_messages_created_at\nON messages(created_at);",
-        description = "~40 секунд, без блокировок. Ускорит листинг в 50–100×.",
-        key = nextKey(),
-    ),
-)
