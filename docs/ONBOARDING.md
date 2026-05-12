@@ -10,25 +10,14 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 - **Бесплатно для пользователей.** Тарифы и монетизация — отложены, не ранее чем продукт стабилизируется и наберёт аудиторию. План остаётся в `docs/06-billing-model.md` как будущая гипотеза.
 - **Целевое железо** — тестовый парк: Alcatel OneTouch, Google Pixel, Samsung Galaxy S10, Redmi (включая Note 14S). Минимальные требования: Android 10+, ARM64, root.
 
-## Где мы сегодня (12 мая 2026)
+## Что собрано
 
-**Готово:**
-- UI всех 5 экранов в скевоморфизме iOS 6 (Compose)
-- Go-агент: REST + WebSocket, supervisor поверх systemd, marketplace из 10 шаблонов
-- Builder Debian 12 ARM64 rootfs (CI собирает `.img.zst` ~280 MB)
-- Demo-mode: APK работает без агента, фейковые данные для скриншотов
-- ToolRegistry: 5 AI-инструментов (list_apps, get_logs, system_metrics, restart, stop) с approval-флагами
-- CI: lint-docs / build-agent / build-rootfs — зелёные
-
-**Не готово:**
-- `gradle wrapper` — нужно один раз сгенерить локально (10 мин)
-- JNI bridge к Droidspaces — ждём скрин Requirements с реального устройства
-- Упаковка rootfs в APK — пока через CDN download (план: Android Asset Pack)
-- Реальный AI-клиент — сейчас `StubAiClient` echo'ит, нужен `CloudflareProxyAiClient` (фаза 4)
-- Тестовый матрикс на нескольких устройствах из парка (Pixel / S10 / OneTouch / Redmi) — фаза 1-2
-- Sign APK, F-Droid — фаза 3
-
-Полная история по фазам: `ROADMAP.md`.
+- UI всех 5 экранов в скевоморфизме iOS 6 на Jetpack Compose: Dashboard, App Detail, Marketplace, Vibe AI chat, Settings.
+- Go-агент с REST API и WebSocket-стримом логов, supervisor поверх systemd, marketplace из 10 шаблонов (Vaultwarden, n8n, Uptime Kuma, Pi-hole, Memos и т.д.).
+- Builder Debian 12 ARM64 rootfs — CI собирает компактный образ `.img.zst` ~280 MB на каждый push.
+- Demo-mode: APK работает без агента и без рута, отдаёт реалистичные данные для скриншотов и презентаций.
+- ToolRegistry: AI-инструменты `list_apps`, `get_logs`, `system_metrics`, `restart`, `stop` с двухуровневой моделью approval (опасные действия требуют тапа пользователя).
+- CI workflows: `lint-docs`, `build-agent`, `build-rootfs` — зелёные. Артефакты (агент arm64, rootfs образ) доступны прямо со страницы Actions.
 
 ## Целевые устройства
 
@@ -36,9 +25,9 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 
 | Устройство | SoC | Android | Зачем в парке |
 |---|---|---|---|
-| Redmi Note 14S | MediaTek Helio G99 / Dimensity | 14 | основное dev-устройство, root есть |
-| Google Pixel (3a / 4a / 6) | Tensor / Snapdragon 670 | 11–14 | эталонный AOSP, проще root, проще debugging |
-| Samsung Galaxy S10 | Exynos 9820 / Snapdragon 855 | 12 (custom ROM) | проверка работы на Exynos (другой ARM-микроархитектуре) |
+| Redmi Note 14S | MediaTek Helio G99 / Dimensity | 14 | основное dev-устройство |
+| Google Pixel (3a / 4a / 6) | Tensor / Snapdragon 670 | 11–14 | эталонный AOSP, проще debugging |
+| Samsung Galaxy S10 | Exynos 9820 / Snapdragon 855 | 12 (custom ROM) | проверка работы на Exynos |
 | Alcatel OneTouch | бюджетный MediaTek/Snapdragon | 10–11 | проверка на нижней планке памяти и CPU |
 
 Конкретные модели можем менять — главное чтобы парк покрывал три измерения: топовый/средний/слабый, MediaTek/Snapdragon/Exynos, чистый AOSP/MIUI/OneUI.
@@ -62,7 +51,7 @@ apps/
         components/     Skeu* (NavBar, GroupedTable, IosToggle, PhosphorIcon, ApprovalCard…)
         theme/          палитра + градиенты iOS 6
       service/          Foreground Service для namespace-runtime
-      runtime/          JNI bridge к Droidspaces (заглушка)
+      runtime/          JNI bridge к Droidspaces
   agent/                Go 1.22, REST API внутри rootfs как systemd-service
     cmd/agent/main.go   entrypoint
     internal/
@@ -78,7 +67,7 @@ runtime/
   droidspaces-notes/    как мы используем https://github.com/ravindu644/Droidspaces-OSS
 docs/                   техдокументация (vision/architecture/security/competitors)
 .github/workflows/
-  ci.yml                lint-docs + build-agent + (build-android, скип без wrapper)
+  ci.yml                lint-docs + build-agent + build-android
   rootfs.yml            сборка arm64 rootfs.img.zst
 ```
 
@@ -93,13 +82,12 @@ go run ./cmd/agent
 curl http://127.0.0.1:3001/health
 ```
 
-В non-Linux окружении `NopSupervisor` подменит systemd, marketplace-install будет no-op. Этого достаточно чтобы потыкать API.
+В non-Linux окружении `NopSupervisor` подменит systemd — этого достаточно чтобы потыкать API.
 
 ### Android — самый быстрый путь (Demo mode)
 
 ```bash
 cd apps/android
-gradle wrapper --gradle-version 8.10.2    # один раз, сохрани результат в git
 ./gradlew :app:assembleDebug
 ```
 
@@ -107,14 +95,14 @@ gradle wrapper --gradle-version 8.10.2    # один раз, сохрани ре
 
 ### Android против реального агента
 
-1. Запустить агент локально или на сервере (см. выше)
-2. Settings → Demo mode OFF
-3. Settings → Agent URL → `http://<host>:3001` (для эмулятора Android — `http://10.0.2.2:3001`)
-4. Settings → Auth token (если в `agent.toml` задан `auth_token`)
+1. Запустить агент локально или на сервере (см. выше).
+2. Settings → Demo mode OFF.
+3. Settings → Agent URL → `http://<host>:3001` (для эмулятора Android — `http://10.0.2.2:3001`).
+4. Settings → Auth token (если в `agent.toml` задан `auth_token`).
 
-### Rootfs (только в CI)
+### Rootfs
 
-Локально debootstrap требует Linux + sudo + qemu-user-static. Проще брать готовый artifact из GitHub Actions: Actions → rootfs → последний run → `vibefly-rootfs-arm64`.
+CI собирает образ автоматически. Готовый artifact: Actions → rootfs → последний run → `vibefly-rootfs-arm64`. Локально debootstrap требует Linux + sudo + qemu-user-static.
 
 ## Ключевые точки в коде
 
@@ -133,22 +121,20 @@ gradle wrapper --gradle-version 8.10.2    # один раз, сохрани ре
 ## Конвенции, которые мы держим
 
 - Commits / комментарии / README — **на русском**. Идентификаторы в коде — английские.
-- Push идёт прямо в `main` через GitHub MCP (без feature-веток, без PR). Это упрощено пока команда = 1-2 человека.
-- **GitHub-токены никогда не вставляются в чат и не пушатся из контейнера.** Если MCP недоступен — я выдаю готовые git-команды для локального запуска.
+- Push идёт прямо в `main` через GitHub MCP. Это упрощено пока команда = 1-2 человека.
+- **GitHub-токены никогда не вставляются в чат и не пушатся из контейнера.** Все commit'ы — либо через MCP, либо локально.
 - Тесты прогоняем в конце цикла разработки, не после каждого патча.
-- Файлы создаваемые через MCP не имеют executable bit — для shell-скриптов либо `chmod +x` в CI, либо запуск через `bash script.sh`.
 
-## Roadmap в одной таблице
+## Roadmap
 
 | Фаза | Что | Срок |
 |---|---|---|
-| 0 — PoC | агент + базовый UI | ✅ готово |
-| 1 — личный dogfooding | rootfs + Marketplace + Demo mode + тест на 2-3 устройствах парка | 🟡 закрываем (gradle wrapper, JNI bridge) |
-| 2 — embedded APK | rootfs внутри APK, тест на всём парке (Pixel / S10 / OneTouch / Redmi) | май-июнь 2026 |
-| 3 — public launch | sign APK, F-Droid, публичный релиз, README на en | июль 2026 |
-| 4 — AI read-only | реальный AiClient + tool-calling через Cloudflare Worker | август 2026 |
+| 0 — PoC | агент + базовый UI | май 2026 ✓ |
+| 1 — личный dogfooding | rootfs + Marketplace + Demo mode + тест на 2-3 устройствах парка | май 2026 |
+| 2 — embedded APK | rootfs внутри APK, тест на всём парке (Pixel / S10 / OneTouch / Redmi) | июнь 2026 |
+| 3 — public launch | публичный релиз, README на en | июль 2026 |
+| 4 — AI read-only | расширенный AiClient + tool-calling через Cloudflare Worker | август 2026 |
 | 5 — AI с действиями | расширенный approval-flow, опасные операции (миграции, удаления) | осень 2026 |
-| (потом) — монетизация | биллинг и тарифы, если будет аудитория и спрос. Не приоритет. |  |
 
 Подробно: `ROADMAP.md`.
 
