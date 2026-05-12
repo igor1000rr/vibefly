@@ -46,7 +46,7 @@ import by.vibefly.app.ui.theme.SkeuColors
 /**
  * Главный экран VibeFly — Device Health + список приложений в стиле iOS 6.
  *
- *  • IosNavBar сверху ("VibeFly" + кнопка "+ Deploy")
+ *  • IosNavBar сверху ("VibeFly" + кнопка "+ Deploy" + опционально refresh)
  *  • Grouped table с 4 метриками устройства
  *  • Grouped table с приложениями, у каждого IosToggle для старт/стоп
  *
@@ -63,6 +63,9 @@ fun DashboardScreen(
     Column(modifier = Modifier.fillMaxSize().linenBackground()) {
         IosNavBar(
             title = "VibeFly",
+            leading = {
+                IosNavButton(text = "↻", onClick = viewModel::refresh)
+            },
             trailing = {
                 IosNavButton(text = "+ Deploy", onClick = onDeployClick)
             },
@@ -196,8 +199,8 @@ private fun AppsTable(
 }
 
 /**
- * Кастомная двух-строчная строка для приложения. GroupedRow рисует только одну
- * строку, поэтому здесь дублируем его layout с поправкой на subtitle.
+ * Двух-строчная строка для приложения. label и compactLine из мокапа — без порта,
+ * с памятью. Для deploying статуса — оранжевый ("Deploying… · prisma migrate"-стиль).
  */
 @Composable
 private fun AppListRow(
@@ -230,7 +233,7 @@ private fun AppListRow(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = app.subtitle + (app.memoryMb?.let { " · $it MB" } ?: ""),
+                text = subtitleFor(app),
                 color = subtitleColor(app.status),
                 fontSize = 11.sp,
             )
@@ -241,6 +244,21 @@ private fun AppListRow(
             onCheckedChange = { onToggle() },
         )
     }
+}
+
+/**
+ * Текст под именем приложения, чувствительный к статусу.
+ *  • Deploying → "Deploying…" (детали в AppDetail)
+ *  • Failed → "Failed · tap for logs"
+ *  • Stopped → "Stopped · last run …"
+ *  • Running → compact line из AppItem (domain · MB)
+ */
+private fun subtitleFor(app: AppItem): String = when (app.status) {
+    AppStatus.Deploying -> "Deploying…"
+    AppStatus.Failed -> "Failed · tap for logs"
+    AppStatus.Stopped -> "Stopped"
+    AppStatus.Unknown -> "—"
+    AppStatus.Running -> app.compactLine
 }
 
 private fun subtitleColor(status: AppStatus): Color = when (status) {
