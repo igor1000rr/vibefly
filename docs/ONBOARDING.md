@@ -7,8 +7,8 @@
 Phone-as-a-Server PaaS. Android-приложение превращает рутованный смартфон в саморазмещаемый сервер для пет-проектов и AI-агентов. Управление через chat с AI-ассистентом — как Lovable/Bolt, но AI работает с **живым сервером**, а не генерирует статичные сайты.
 
 - **Open-source ядро** (AGPL-3.0) — APK + Go-агент + Debian rootfs
-- **Cloud control plane** (будущее, фаза 5) — биллинг, тарифы Free / Pro $9 / Studio $29 / BYOK $5
-- **Целевое железо** — Redmi Note 14S с root, в перспективе любой Android 10+ ARM64
+- **Бесплатно для пользователей.** Тарифы и монетизация — отложены, не ранее чем продукт стабилизируется и наберёт аудиторию. План остаётся в `docs/06-billing-model.md` как будущая гипотеза.
+- **Целевое железо** — тестовый парк: Alcatel OneTouch, Google Pixel, Samsung Galaxy S10, Redmi (включая Note 14S). Минимальные требования: Android 10+, ARM64, root.
 
 ## Где мы сегодня (12 мая 2026)
 
@@ -22,12 +22,32 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 
 **Не готово:**
 - `gradle wrapper` — нужно один раз сгенерить локально (10 мин)
-- JNI bridge к Droidspaces — ждём скрин Requirements с Note 14S
+- JNI bridge к Droidspaces — ждём скрин Requirements с реального устройства
 - Упаковка rootfs в APK — пока через CDN download (план: Android Asset Pack)
 - Реальный AI-клиент — сейчас `StubAiClient` echo'ит, нужен `CloudflareProxyAiClient` (фаза 4)
-- Биллинг, sign APK, F-Droid — фаза 5
+- Тестовый матрикс на нескольких устройствах из парка (Pixel / S10 / OneTouch / Redmi) — фаза 1-2
+- Sign APK, F-Droid — фаза 3
 
 Полная история по фазам: `ROADMAP.md`.
+
+## Целевые устройства
+
+Парк тестирования (приоритет — сверху вниз):
+
+| Устройство | SoC | Android | Зачем в парке |
+|---|---|---|---|
+| Redmi Note 14S | MediaTek Helio G99 / Dimensity | 14 | основное dev-устройство, root есть |
+| Google Pixel (3a / 4a / 6) | Tensor / Snapdragon 670 | 11–14 | эталонный AOSP, проще root, проще debugging |
+| Samsung Galaxy S10 | Exynos 9820 / Snapdragon 855 | 12 (custom ROM) | проверка работы на Exynos (другой ARM-микроархитектуре) |
+| Alcatel OneTouch | бюджетный MediaTek/Snapdragon | 10–11 | проверка на нижней планке памяти и CPU |
+
+Конкретные модели можем менять — главное чтобы парк покрывал три измерения: топовый/средний/слабый, MediaTek/Snapdragon/Exynos, чистый AOSP/MIUI/OneUI.
+
+**Минимальные требования для пользователя:**
+- Android 10+ (для namespace API)
+- ARM64 (`arm64-v8a`, не armeabi-v7a)
+- root (Magisk/KernelSU предпочтительнее SuperSU)
+- ≥ 3 GB RAM, ≥ 4 GB свободного места под rootfs
 
 ## Структура репо
 
@@ -56,7 +76,7 @@ apps/
 runtime/
   rootfs-builder/       debootstrap → ext4 → zstd
   droidspaces-notes/    как мы используем https://github.com/ravindu644/Droidspaces-OSS
-docs/                   техдокументация (vision/architecture/security/billing/competitors)
+docs/                   техдокументация (vision/architecture/security/competitors)
 .github/workflows/
   ci.yml                lint-docs + build-agent + (build-android, скип без wrapper)
   rootfs.yml            сборка arm64 rootfs.img.zst
@@ -123,11 +143,12 @@ gradle wrapper --gradle-version 8.10.2    # один раз, сохрани ре
 | Фаза | Что | Срок |
 |---|---|---|
 | 0 — PoC | агент + базовый UI | ✅ готово |
-| 1 — личный dogfooding | rootfs + Marketplace + Demo mode | 🟡 закрываем (gradle wrapper, JNI bridge) |
-| 2 — embedded APK | rootfs внутри APK, sign, F-Droid | май-июнь 2026 |
-| 3 — open-source launch | публичный релиз, README на en | июль 2026 |
-| 4 — AI read-only | реальный AiClient + tool-calling | август 2026 |
-| 5 — AI с действиями + биллинг | approval-flow, Cloud control plane, Pro/Studio | осень 2026 |
+| 1 — личный dogfooding | rootfs + Marketplace + Demo mode + тест на 2-3 устройствах парка | 🟡 закрываем (gradle wrapper, JNI bridge) |
+| 2 — embedded APK | rootfs внутри APK, тест на всём парке (Pixel / S10 / OneTouch / Redmi) | май-июнь 2026 |
+| 3 — public launch | sign APK, F-Droid, публичный релиз, README на en | июль 2026 |
+| 4 — AI read-only | реальный AiClient + tool-calling через Cloudflare Worker | август 2026 |
+| 5 — AI с действиями | расширенный approval-flow, опасные операции (миграции, удаления) | осень 2026 |
+| (потом) — монетизация | биллинг и тарифы, если будет аудитория и спрос. Не приоритет. |  |
 
 Подробно: `ROADMAP.md`.
 
@@ -138,7 +159,7 @@ gradle wrapper --gradle-version 8.10.2    # один раз, сохрани ре
 - `docs/01-architecture.md` — техдетали (Droidspaces, namespace-runtime, JNI)
 - `docs/04-tech-stack.md` — обоснование выбора Kotlin / Go / Debian
 - `docs/05-security-model.md` — threat model + защита от prompt injection
-- `docs/06-billing-model.md` — экономика тарифов, MRR-сценарии $5–15k за 12 месяцев
+- `docs/06-billing-model.md` — будущая гипотеза монетизации (сейчас не применяется, продукт бесплатный)
 - `docs/07-competitors.md` — vs Bolt / Lovable / v0 / Coolify / Vercel / Andronix
 - `apps/agent/docs/API.md` — REST API v0.3
 
