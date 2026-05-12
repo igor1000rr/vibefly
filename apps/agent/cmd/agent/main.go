@@ -19,9 +19,10 @@ import (
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/server"
 	"by.vibefly/agent/internal/supervisor"
+	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.3-dev"
+var Version = "0.0.4-dev"
 
 func main() {
 	var (
@@ -54,6 +55,28 @@ func main() {
 	appsStore := apps.NewStore(logger, sup)
 	catalog := marketplace.New()
 
+	// Tunnel manager — если включён в конфиге.
+	var tun tunnel.Manager
+	if cfg.Tunnel.Enabled {
+		tun = tunnel.NewCloudflared(tunnel.CloudflaredOptions{
+			Logger:         logger.With("component", "tunnel"),
+			Binary:         cfg.Tunnel.Binary,
+			TargetURL:      cfg.Tunnel.Target,
+			StartupTimeout: cfg.Tunnel.StartupTimeout,
+		})
+		logger.Info("tunnel", "enabled", true, "target", cfg.Tunnel.Target)
+
+		if cfg.Tunnel.Autostart {
+			go func() {
+				startCtx, startCancel := context.WithTimeout(context.Background(), cfg.Tunnel.StartupTimeout+10*time.Second)
+				defer startCancel()
+				if _, err := tun.Start(startCtx); err != nil {
+					logger.Warn("tunnel autostart failed", "err", err)
+				}
+			}()
+		}
+	}
+
 	// Фейк-логи только в demo-режиме.
 	if !sup.Available() {
 		appIDs := make([]string, 0, len(appsStore.List()))
@@ -71,6 +94,7 @@ func main() {
 		Logs:        logStreamer,
 		Supervisor:  sup,
 		Marketplace: catalog,
+		Tunnel:      tun,
 		Token:       cfg.AuthToken,
 	}
 
@@ -92,6 +116,9 @@ func main() {
 	logger.Info("shutdown")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
+	if tun != nil {
+		_ = tun.Close()
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка shutdown", "err", err)
 	}

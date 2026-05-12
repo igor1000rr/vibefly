@@ -20,6 +20,7 @@ import (
 	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/supervisor"
+	"by.vibefly/agent/internal/tunnel"
 )
 
 // Dependencies — всё что нужно роутеру.
@@ -31,6 +32,7 @@ type Dependencies struct {
 	Logs        *logs.Streamer
 	Supervisor  supervisor.Supervisor
 	Marketplace *marketplace.Catalog
+	Tunnel      tunnel.Manager
 	Token       string
 }
 
@@ -42,7 +44,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(slogRequestLogger(deps.Logger))
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(middleware.Timeout(120 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -69,6 +71,10 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/marketplace", marketplaceListHandler(deps))
 		r.Get("/marketplace/{id}", marketplaceGetHandler(deps))
 		r.Post("/marketplace/{id}/install", marketplaceInstallHandler(deps))
+
+		r.Get("/tunnel", tunnelStatusHandler(deps))
+		r.Post("/tunnel/start", tunnelStartHandler(deps))
+		r.Post("/tunnel/stop", tunnelStopHandler(deps))
 	})
 
 	return r
@@ -81,6 +87,7 @@ func healthHandler(deps Dependencies) http.HandlerFunc {
 			"version":              deps.Version,
 			"time":                 time.Now().UTC(),
 			"supervisor_available": deps.Supervisor != nil && deps.Supervisor.Available(),
+			"tunnel_available":     deps.Tunnel != nil,
 		})
 	}
 }
@@ -226,8 +233,6 @@ func logsRecentHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// logsStreamHandler отдаёт лайв-логи. Если supervisor доступен — использует
-// journalctl -fu через supervisor.FollowLogs, иначе fallback на in-memory streamer.
 func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -317,9 +322,8 @@ func marketplaceGetHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// marketplaceInstallRequest — пользовательские параметры (env, локальный id).
 type marketplaceInstallRequest struct {
-	AppID  string            `json:"app_id"` // как назвать установленное приложение
+	AppID  string            `json:"app_id"`
 	Domain string            `json:"domain"`
 	Port   int               `json:"port"`
 	Env    map[string]string `json:"env"`
@@ -339,7 +343,7 @@ func marketplaceInstallHandler(deps Dependencies) http.HandlerFunc {
 		}
 
 		var req marketplaceInstallRequest
-		_ = json.NewDecoder(r.Body).Decode(&req) // тело опционально
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		appID := firstNonEmpty(req.AppID, tpl.ID)
 		port := req.Port
@@ -367,17 +371,16 @@ func marketplaceInstallHandler(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"status":      "installed",
-			"id":          appID,
-			"template":    templateID,
-			"supervisor":  deps.Supervisor != nil && deps.Supervisor.Available(),
+			"status":     "installed",
+			"id":         appID,
+			"template":   templateID,
+			"supervisor": deps.Supervisor != nil && deps.Supervisor.Available(),
 		})
 	}
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-// classifyLogLevel — грубая эвристика для подкраски строк journalctl.
 func classifyLogLevel(line string) logs.Level {
 	lower := strings.ToLower(line)
 	switch {

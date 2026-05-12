@@ -10,3 +10,27 @@ apps_dir = "/var/lib/vibefly/apps"
 
 # Где живут логи приложений.
 logs_dir = "/var/log/vibefly"
+
+# ─── Cloudflare Tunnel (публичный ingress) ──────────────────────────────────
+#
+# Зачем: телефон-сервер сидит за NAT, наружу его без туннеля не достать.
+# cloudflared в quick-tunnel режиме даёт публичный *.trycloudflare.com URL
+# без auth и без настройки домена.
+#
+# Для собственного домена (например, my-server.vibefly.app) используется
+# named tunnel — он будет добавлен в следующей фазе.
+[tunnel]
+# Создавать ли tunnel.Manager. Если false — эндпоинты /tunnel вернут 503.
+enabled = false
+
+# Пытаться поднять туннель сразу при старте агента.
+autostart = false
+
+# Путь к cloudflared. Пустое = искать в $PATH.
+binary = "cloudflared"
+
+# Куда проксировать. Если пустое — авто-подставится из listen.
+target = ""
+
+# Сколько ждать публичный URL в stderr cloudflared.
+startup_timeout = "60s"
