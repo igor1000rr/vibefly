@@ -8,7 +8,7 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 
 - **Open-source ядро** (AGPL-3.0) — APK + Go-агент + Debian rootfs
 - **Бесплатно для пользователей.** Тарифы и монетизация — отложены, не ранее чем продукт стабилизируется и наберёт аудиторию. План остаётся в `docs/06-billing-model.md` как будущая гипотеза.
-- **Целевое железо** — тестовый парк: Alcatel OneTouch, Google Pixel, Samsung Galaxy S10, Redmi (включая Note 14S). Минимальные требования: Android 10+, ARM64, root.
+- **Целевое железо** — тестовый парк: Alcatel OneTouch, Google Pixel, Samsung Galaxy S10, Redmi (включая Note 14S). Минимальные требования: Android 10+, ARM64, root, 4 ГБ RAM.
 
 ## Что собрано
 
@@ -28,7 +28,7 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 | Redmi Note 14S | MediaTek Helio G99 / Dimensity | 14 | основное dev-устройство |
 | Google Pixel (3a / 4a / 6) | Tensor / Snapdragon 670 | 11–14 | эталонный AOSP, проще debugging |
 | Samsung Galaxy S10 | Exynos 9820 / Snapdragon 855 | 12 (custom ROM) | проверка работы на Exynos |
-| Alcatel OneTouch | бюджетный MediaTek/Snapdragon | 10–11 | проверка на нижней планке памяти и CPU |
+| Alcatel OneTouch | бюджетный MediaTek/Snapdragon | 10–11 | проверка на нижней планке CPU |
 
 Конкретные модели можем менять — главное чтобы парк покрывал три измерения: топовый/средний/слабый, MediaTek/Snapdragon/Exynos, чистый AOSP/MIUI/OneUI.
 
@@ -36,7 +36,7 @@ Phone-as-a-Server PaaS. Android-приложение превращает рут
 - Android 10+ (для namespace API)
 - ARM64 (`arm64-v8a`, не armeabi-v7a)
 - root (Magisk/KernelSU предпочтительнее SuperSU)
-- ≥ 3 GB RAM, ≥ 4 GB свободного места под rootfs
+- ≥ 4 ГБ RAM, ≥ 4 ГБ свободного места под rootfs
 
 ## Структура репо
 
