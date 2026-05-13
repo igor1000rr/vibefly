@@ -129,8 +129,16 @@ class AgentClient(
         http.close()
     }
 
+    /**
+     * Шлёт значение в канал, тихо игнорируя случай переполнения буфера или закрытого канала.
+     * trySend возвращает ChannelResult — проверяем флаг isSuccess вручную, потому что
+     * onFailure требует opt-in в некоторых версиях kotlinx-coroutines.
+     */
     private fun <T> ProducerScope<T>.sendOrSkip(value: T) {
-        trySend(value).onFailure { /* slow consumer */ }
+        val result = trySend(value)
+        if (!result.isSuccess) {
+            // slow consumer или канал закрыт — пропускаем
+        }
     }
 
     companion object {
