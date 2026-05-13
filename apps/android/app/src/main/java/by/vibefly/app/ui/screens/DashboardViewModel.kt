@@ -11,6 +11,7 @@ import by.vibefly.app.agent.SystemMetricsDto
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -27,7 +28,9 @@ data class DashboardState(
 /**
  * DashboardViewModel — тянет метрики и список приложений с агента.
  *
- * Если агент недоступен — выставляется error, UI покажет сообщение "запустить runtime".
+ * Критично ловить все ошибки в observeMetrics()/refresh() и в toggle/restart, иначе
+ * при недоступном агенте (первый запуск, без demo-mode) корутина падает с
+ * необработанным исключением — Android выкидывает пользователя из приложения.
  */
 class DashboardViewModel(
     private val apps: AppsRepository = ServiceLocator.apps(),
@@ -47,9 +50,14 @@ class DashboardViewModel(
             _state.update { it.copy(loading = true, error = null) }
             try {
                 val list = apps.list()
-                _state.update { it.copy(apps = list, loading = false) }
+                _state.update { it.copy(apps = list, loading = false, error = null) }
             } catch (t: Throwable) {
-                _state.update { it.copy(loading = false, error = t.localizedMessage) }
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        error = t.localizedMessage ?: "Агент недоступен",
+                    )
+                }
             }
         }
     }
@@ -77,9 +85,17 @@ class DashboardViewModel(
 
     private fun observeMetrics() {
         viewModelScope.launch {
-            system.stream(intervalMs = 3_000).collect { snap ->
-                _state.update { it.copy(metrics = snap) }
-            }
+            // catch на Flow и try внутри collect — две линии защиты на случай если
+            // SystemRepository.stream бросит при первом вызове (нет сети на агент).
+            system.stream(intervalMs = 3_000)
+                .catch { t ->
+                    _state.update {
+                        it.copy(error = t.localizedMessage ?: "Нет связи с агентом")
+                    }
+                }
+                .collect { snap ->
+                    _state.update { it.copy(metrics = snap, error = null) }
+                }
         }
     }
 }

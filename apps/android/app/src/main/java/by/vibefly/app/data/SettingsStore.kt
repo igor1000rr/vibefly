@@ -58,7 +58,10 @@ class SettingsStore(context: Context) {
         aiProvider = runCatching {
             AiProvider.valueOf(plain.getString(KEY_AI_PROVIDER, AiProvider.Llama.name) ?: AiProvider.Llama.name)
         }.getOrDefault(AiProvider.Llama),
-        demoMode = plain.getBoolean(KEY_DEMO_MODE, false),
+        // Demo mode включён по умолчанию — в фазе 1 у пользователя ещё нет работающего
+        // агента на устройстве, поэтому пусть сразу видит рабочий UI с fake-данными.
+        // Выключится ручным тогглом когда будет реальный агент.
+        demoMode = plain.getBoolean(KEY_DEMO_MODE, true),
     )
 
     data class Snapshot(
