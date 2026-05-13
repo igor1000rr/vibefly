@@ -2,6 +2,7 @@ package by.vibefly.app.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import by.vibefly.app.agent.InstallAppRequest
 import by.vibefly.app.data.AppItem
 import by.vibefly.app.data.AppStatus
 import by.vibefly.app.data.AppsRepository
@@ -15,23 +16,15 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/**
- * Состояние главного экрана.
- */
 data class DashboardState(
     val metrics: SystemMetricsDto? = null,
     val apps: List<AppItem> = emptyList(),
     val loading: Boolean = true,
     val error: String? = null,
+    val deploying: Boolean = false,
+    val deployError: String? = null,
 )
 
-/**
- * DashboardViewModel — тянет метрики и список приложений с агента.
- *
- * Критично ловить все ошибки в observeMetrics()/refresh() и в toggle/restart, иначе
- * при недоступном агенте (первый запуск, без demo-mode) корутина падает с
- * необработанным исключением — Android выкидывает пользователя из приложения.
- */
 class DashboardViewModel(
     private val apps: AppsRepository = ServiceLocator.apps(),
     private val system: SystemRepository = ServiceLocator.system(),
@@ -69,10 +62,6 @@ class DashboardViewModel(
         }
     }
 
-    /**
-     * Один-тап toggle на дашборде: если приложение running — стоп, иначе старт.
-     * Затем рефреш состояния.
-     */
     fun toggle(item: AppItem) {
         viewModelScope.launch {
             runCatching {
@@ -83,10 +72,35 @@ class DashboardViewModel(
         }
     }
 
+    /**
+     * Развернуть новое приложение. При успехе onSuccess вызывается из main thread
+     * для закрытия диалога. При ошибке deployError попадает в state.
+     */
+    fun deploy(req: InstallAppRequest, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _state.update { it.copy(deploying = true, deployError = null) }
+            try {
+                apps.install(req)
+                _state.update { it.copy(deploying = false, deployError = null) }
+                refresh()
+                onSuccess()
+            } catch (t: Throwable) {
+                _state.update {
+                    it.copy(
+                        deploying = false,
+                        deployError = t.localizedMessage ?: "Не удалось развернуть",
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearDeployError() {
+        _state.update { it.copy(deployError = null) }
+    }
+
     private fun observeMetrics() {
         viewModelScope.launch {
-            // catch на Flow и try внутри collect — две линии защиты на случай если
-            // SystemRepository.stream бросит при первом вызове (нет сети на агент).
             system.stream(intervalMs = 3_000)
                 .catch { t ->
                     _state.update {

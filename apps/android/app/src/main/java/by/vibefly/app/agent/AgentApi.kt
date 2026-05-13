@@ -7,10 +7,7 @@ import kotlinx.coroutines.flow.Flow
  *
  * Две реализации:
  *  • AgentClient     — ходит в Go-агент по HTTP/WebSocket
- *  • MockAgentClient — возвращает хардкоженные demo-данные, без сети
- *
- * Интерфейс держит все исходящие вызовы к агенту — ToolRegistry, AppsRepository,
- * SystemRepository, MarketplaceRepository упираются именно в этот интерфейс, не в класс.
+ *  • MockAgentClient — возвращает хардкоженные demo-данные
  */
 interface AgentApi {
     val baseUrl: String
@@ -20,6 +17,7 @@ interface AgentApi {
 
     suspend fun listApps(): List<AppDto>
     suspend fun getApp(id: String): AppDto
+    suspend fun installApp(req: InstallAppRequest): AppDto
     suspend fun startApp(id: String): CommandResultDto
     suspend fun restartApp(id: String): CommandResultDto
     suspend fun stopApp(id: String): CommandResultDto
@@ -37,6 +35,6 @@ interface AgentApi {
     suspend fun tunnelStart(): TunnelStatusDto
     suspend fun tunnelStop(): TunnelStatusDto
 
-    /** Закрыть все сетевые ресурсы. Неидемпотентно — повторные вызовы игнорируются. */
+    /** Закрыть все сетевые ресурсы. */
     fun close()
 }

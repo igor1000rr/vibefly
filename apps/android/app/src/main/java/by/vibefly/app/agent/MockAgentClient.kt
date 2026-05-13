@@ -4,18 +4,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
-/**
- * MockAgentClient — возвращает хардкоженные demo-данные без сети. Предназначен
- * для демо/каталога/скриншотов и для случаев когда агент ещё не развёрнут.
- *
- * Переключается в SettingsStore.demoMode = true. Команды restart/stop/start/install/tunnel
- * обновляют внутреннее состояние, чтобы UI вел себя правдоподобно.
- */
 class MockAgentClient : AgentApi {
 
     override val baseUrl: String = "mock://"
 
-    // Изменяемое состояние — имитирует in-memory базу агента.
     private val apps = mutableListOf(
         AppDto(
             id = "amina-bot",
@@ -67,8 +59,6 @@ class MockAgentClient : AgentApi {
         ),
     )
 
-    // Mock state туннеля. Когда пользователь нажимает Start — ждём пару секунд и
-    // выдаём фейковый trycloudflare URL, чтобы было похоже на реальный сценарий.
     @Volatile
     private var tunnel: TunnelStatusDto = TunnelStatusDto(provider = "trycloudflare")
 
@@ -106,6 +96,24 @@ class MockAgentClient : AgentApi {
         simulateLatency()
         return apps.firstOrNull { it.id == id }
             ?: throw NoSuchElementException("App not found: $id")
+    }
+
+    override suspend fun installApp(req: InstallAppRequest): AppDto {
+        simulateLatency(500)
+        val newApp = AppDto(
+            id = req.id,
+            name = req.name.ifBlank { req.id },
+            status = "stopped",
+            repo = null,
+            branch = null,
+            port = req.port,
+            domain = req.domain,
+            memoryMb = null,
+            startedAt = null,
+            lastDeploy = nowIso(),
+        )
+        apps.add(newApp)
+        return newApp
     }
 
     override suspend fun startApp(id: String): CommandResultDto = mutateStatus(id, "running")
@@ -171,8 +179,6 @@ class MockAgentClient : AgentApi {
         )
     }
 
-    // ===== Tunnel =====
-
     override suspend fun tunnelStatus(): TunnelStatusDto {
         simulateLatency()
         return tunnel
@@ -180,7 +186,6 @@ class MockAgentClient : AgentApi {
 
     override suspend fun tunnelStart(): TunnelStatusDto {
         if (tunnel.active) return tunnel
-        // Имитируем cloudflared startup — пару секунд.
         delay(2_500)
         tunnel = TunnelStatusDto(
             active = true,
@@ -199,10 +204,7 @@ class MockAgentClient : AgentApi {
     }
 
     override fun close() {
-        // Ничего освобождать не нужно.
     }
-
-    // ─── Внутренние helper'ы ──────────────────────────────────────────────────────────
 
     private suspend fun mutateStatus(id: String, newStatus: String): CommandResultDto {
         simulateLatency()

@@ -14,20 +14,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import by.vibefly.app.agent.InstallAppRequest
 import by.vibefly.app.agent.SystemMetricsDto
 import by.vibefly.app.data.AppItem
 import by.vibefly.app.data.AppStatus
@@ -45,22 +53,20 @@ import by.vibefly.app.ui.theme.PhosphorTint
 import by.vibefly.app.ui.theme.SkeuColors
 
 /**
- * Главный экран VibeFly — Embedded runtime status + Device Health + список приложений.
+ * Главный экран VibeFly — Embedded runtime + Device Health + список приложений.
  *
- *  • IosNavBar сверху ("VibeFly" + кнопка "+ Deploy" + опционально refresh)
- *  • RuntimeStatusCard (только если embedded agent запускался)
- *  • Grouped table с 4 метриками устройства
- *  • Grouped table с приложениями, у каждого IosToggle для старт/стоп
- *
- * TabBar рисуется NavHost'ом снаружи, не здесь.
+ * +Deploy открывает DeployDialog — вводятся id, name, start_cmd, port — и вызывает
+ * POST /apps через DashboardViewModel.deploy. При успехе приложение появляется
+ * в списке как Stopped — жмешь toggle, оно реально стартует через ExecSupervisor.
  */
 @Composable
 fun DashboardScreen(
     onAppClick: (String) -> Unit,
-    onDeployClick: () -> Unit,
+    onDeployClick: () -> Unit = {},
     viewModel: DashboardViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var showDeployDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().linenBackground()) {
         IosNavBar(
@@ -69,14 +75,17 @@ fun DashboardScreen(
                 IosNavButton(text = "↻", onClick = viewModel::refresh)
             },
             trailing = {
-                IosNavButton(text = "+ Deploy", onClick = onDeployClick)
+                IosNavButton(
+                    text = "+ Deploy",
+                    onClick = {
+                        showDeployDialog = true
+                        onDeployClick()
+                    },
+                )
             },
         )
         when {
             state.loading && state.apps.isEmpty() -> {
-                // Даже во время первой загрузки показываем runtime status —
-                // он не зависит от загрузки данных с агента, и пользователю важно
-                // видеть запускается ли embedded server.
                 RuntimeStatusCard()
                 LoadingPlaceholder()
             }
@@ -91,6 +100,20 @@ fun DashboardScreen(
                 onToggle = viewModel::toggle,
             )
         }
+    }
+
+    if (showDeployDialog) {
+        DeployDialog(
+            deploying = state.deploying,
+            error = state.deployError,
+            onConfirm = { req ->
+                viewModel.deploy(req) { showDeployDialog = false }
+            },
+            onDismiss = {
+                viewModel.clearDeployError()
+                showDeployDialog = false
+            },
+        )
     }
 }
 
@@ -144,11 +167,19 @@ private fun DashboardContent(
         SectionHeader("Device health")
         DeviceHealthTable(metrics)
 
-        SectionHeader("Apps · ${apps.size}")
-        AppsTable(apps = apps, onAppClick = onAppClick, onToggle = onToggle)
+        if (apps.isEmpty()) {
+            SectionHeader("Apps")
+            EmptyAppsCard()
+        } else {
+            SectionHeader("Apps · ${apps.size}")
+            AppsTable(apps = apps, onAppClick = onAppClick, onToggle = onToggle)
+        }
 
         Text(
-            text = "Toggle to start or stop apps. Tap a row for logs and details.",
+            text = if (apps.isEmpty())
+                "Нажми + Deploy в верхнем правом углу чтобы развернуть первое приложение."
+            else
+                "Toggle to start or stop apps. Tap a row for logs and details.",
             color = SkeuColors.SecondaryText,
             fontSize = 11.sp,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
@@ -156,7 +187,23 @@ private fun DashboardContent(
     }
 }
 
-// ─── Device Health ───────────────────────────────────────────────────────────
+@Composable
+private fun EmptyAppsCard() {
+    GroupedTable {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Пока ничего не развёрнуто",
+                color = SkeuColors.SecondaryText,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
 
 @Composable
 private fun DeviceHealthTable(metrics: SystemMetricsDto?) {
@@ -191,8 +238,6 @@ private fun DeviceHealthTable(metrics: SystemMetricsDto?) {
     }
 }
 
-// ─── Apps list ───────────────────────────────────────────────────────────────
-
 @Composable
 private fun AppsTable(
     apps: List<AppItem>,
@@ -211,10 +256,6 @@ private fun AppsTable(
     }
 }
 
-/**
- * Двух-строчная строка для приложения. label и compactLine из мокапа — без порта,
- * с памятью. Для deploying статуса — оранжевый ("Deploying… · prisma migrate"-стиль).
- */
 @Composable
 private fun AppListRow(
     app: AppItem,
@@ -302,4 +343,101 @@ private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (
         2 -> PhosphorTint.Violet
         else -> PhosphorTint.Orange
     }
+}
+
+/**
+ * Диалог развёртывания нового приложения. Минимальный набор полей — id и команда
+ * запуска. Для Go-бинарей пользователь может положить их в apps_dir/<id>/ через adb или
+ * curl и указать start_cmd = "./mybin".
+ */
+@Composable
+private fun DeployDialog(
+    deploying: Boolean,
+    error: String?,
+    onConfirm: (InstallAppRequest) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var id by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var startCmd by remember { mutableStateOf("") }
+    var portText by remember { mutableStateOf("") }
+
+    val canConfirm = id.isNotBlank() && startCmd.isNotBlank() && !deploying
+
+    AlertDialog(
+        onDismissRequest = { if (!deploying) onDismiss() },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onConfirm(
+                        InstallAppRequest(
+                            id = id.trim(),
+                            name = name.trim().ifBlank { id.trim() },
+                            startCmd = startCmd.trim(),
+                            port = portText.trim().toIntOrNull(),
+                        )
+                    )
+                },
+                enabled = canConfirm,
+            ) { Text(if (deploying) "Разворачиваю…" else "Deploy") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !deploying) { Text("Отмена") }
+        },
+        title = { Text("Развернуть приложение") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = id,
+                    onValueChange = { id = it.filter { c -> c.isLetterOrDigit() || c == '-' || c == '_' } },
+                    label = { Text("ID (slug)") },
+                    placeholder = { Text("my-bot") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Имя (не обязательно)") },
+                    placeholder = { Text("My bot") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = startCmd,
+                    onValueChange = { startCmd = it },
+                    label = { Text("Команда запуска") },
+                    placeholder = { Text("./mybin --port 8080") },
+                    singleLine = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { portText = it.filter { c -> c.isDigit() } },
+                    label = { Text("Порт (не обязательно)") },
+                    placeholder = { Text("8080") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (error != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = error,
+                        color = SkeuColors.AccentRed,
+                        fontSize = 12.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Рабочая директория — apps_dir/<id>. Бинарь нужно положить туда заранее через adb или туннель.",
+                    color = SkeuColors.SecondaryText,
+                    fontSize = 10.sp,
+                )
+            }
+        },
+    )
 }

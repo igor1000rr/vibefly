@@ -25,11 +25,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.Json
 
-/**
- * Ktor-клиент к Go-агенту на 127.0.0.1:3001 (или публичному хосту).
- *
- * Реальный transport: HTTP против агента + WebSocket для стриминга логов.
- */
 class AgentClient(
     override val baseUrl: String = DEFAULT_BASE_URL,
     private val tokenProvider: () -> String? = { null },
@@ -44,8 +39,6 @@ class AgentClient(
         install(ContentNegotiation) { json(jsonCodec) }
         install(WebSockets)
         install(HttpTimeout) {
-            // tunnel/start может ждать до 60с cloudflared startup,
-            // поэтому request timeout высокий.
             requestTimeoutMillis = 90_000
             connectTimeoutMillis = 5_000
             socketTimeoutMillis = 90_000
@@ -69,6 +62,12 @@ class AgentClient(
     override suspend fun systemMetrics(): SystemMetricsDto = http.get("$baseUrl/system").body()
     override suspend fun listApps(): List<AppDto> = http.get("$baseUrl/apps").body()
     override suspend fun getApp(id: String): AppDto = http.get("$baseUrl/apps/$id").body()
+
+    override suspend fun installApp(req: InstallAppRequest): AppDto =
+        http.post("$baseUrl/apps") {
+            contentType(ContentType.Application.Json)
+            setBody(req)
+        }.body()
 
     override suspend fun restartApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/restart").body()
@@ -99,8 +98,6 @@ class AgentClient(
         }
     }
 
-    // ===== Marketplace =====
-
     override suspend fun marketplaceList(): List<MarketplaceTemplateDto> =
         http.get("$baseUrl/marketplace").body()
 
@@ -113,8 +110,6 @@ class AgentClient(
             setBody(req)
         }
     }
-
-    // ===== Tunnel =====
 
     override suspend fun tunnelStatus(): TunnelStatusDto =
         http.get("$baseUrl/tunnel").body()
@@ -129,15 +124,10 @@ class AgentClient(
         http.close()
     }
 
-    /**
-     * Шлёт значение в канал, тихо игнорируя случай переполнения буфера или закрытого канала.
-     * trySend возвращает ChannelResult — проверяем флаг isSuccess вручную, потому что
-     * onFailure требует opt-in в некоторых версиях kotlinx-coroutines.
-     */
     private fun <T> ProducerScope<T>.sendOrSkip(value: T) {
         val result = trySend(value)
         if (!result.isSuccess) {
-            // slow consumer или канал закрыт — пропускаем
+            // slow consumer или канал закрыт
         }
     }
 

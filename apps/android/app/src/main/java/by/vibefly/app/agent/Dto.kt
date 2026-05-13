@@ -43,6 +43,19 @@ data class AppDto(
     @SerialName("last_deploy") val lastDeploy: String? = null,
 )
 
+/**
+ * Запрос на создание приложения через POST /apps.
+ * Зеркальный server.CommandCreateAppRequest.
+ */
+@Serializable
+data class InstallAppRequest(
+    val id: String,
+    val name: String,
+    @SerialName("start_cmd") val startCmd: String,
+    val port: Int? = null,
+    val domain: String? = null,
+)
+
 @Serializable
 data class CommandResultDto(
     val status: String,
@@ -54,9 +67,6 @@ data class ErrorDto(
     val error: String,
 )
 
-/**
- * Запись лога. Зеркальный type для apps/agent/internal/logs.Entry.
- */
 @Serializable
 data class LogEntryDto(
     val time: String,
@@ -66,12 +76,6 @@ data class LogEntryDto(
     val message: String,
 )
 
-/**
- * Статус публичного туннеля. Зеркальный type для apps/agent/internal/tunnel.Status.
- *
- * Provider — "none" / "trycloudflare" / "named". На текущей фазе всегда
- * "trycloudflare" когда включён, "none" когда manager не настроен.
- */
 @Serializable
 data class TunnelStatusDto(
     val active: Boolean = false,
