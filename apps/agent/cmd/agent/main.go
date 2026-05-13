@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.4-dev"
+var Version = "0.0.5-dev"
 
 func main() {
 	var (
@@ -49,10 +49,10 @@ func main() {
 	defer cancel()
 
 	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir)
-	logger.Info("supervisor", "available", sup.Available())
+	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
 
 	logStreamer := logs.NewStreamer(logger, 500)
-	appsStore := apps.NewStore(logger, sup)
+	appsStore := apps.NewStore(logger, sup, cfg.SeedDemoApps)
 	catalog := marketplace.New()
 
 	// Tunnel manager — если включён в конфиге.
@@ -77,8 +77,8 @@ func main() {
 		}
 	}
 
-	// Фейк-логи только в demo-режиме.
-	if !sup.Available() {
+	// Фейк-логи только когда и demo-mode, и supervisor недоступен.
+	if !sup.Available() && cfg.SeedDemoApps {
 		appIDs := make([]string, 0, len(appsStore.List()))
 		for _, a := range appsStore.List() {
 			appIDs = append(appIDs, a.ID)

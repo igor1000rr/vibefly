@@ -2,8 +2,7 @@
 //
 // Store держит метаданные приложений в памяти, а реальные операции
 // (start/stop/restart, статус, логи) делегирует supervisor'у. На non-Linux
-// или там, где systemd недоступен, supervisor — это NopSupervisor, и Store
-// работает как in-memory с фейк-данными для UI-разработки.
+// или там, где systemd недоступен, supervisor — это NopSupervisor.
 package apps
 
 import (
@@ -55,14 +54,15 @@ type Store struct {
 }
 
 // NewStore создаёт хранилище. Если supervisor.Available() — статусы
-// синхронизируются с systemd. Иначе — фейк-данные для UI-разработки.
-func NewStore(logger *slog.Logger, sup supervisor.Supervisor) *Store {
+// синхронизируются с systemd. Иначе Store пустой (или с фейк-данными,
+// если seedDemo=true).
+func NewStore(logger *slog.Logger, sup supervisor.Supervisor, seedDemo bool) *Store {
 	s := &Store{
 		items:      make(map[string]*App),
 		logger:     logger,
 		supervisor: sup,
 	}
-	if !sup.Available() {
+	if !sup.Available() && seedDemo {
 		s.seedFakes()
 	}
 	return s
@@ -101,8 +101,7 @@ func (s *Store) seedFakes() {
 	}
 }
 
-// List возвращает все приложения отсортированные по имени. Если supervisor
-// доступен, для каждого приложения подтягивается актуальный статус из systemd.
+// List возвращает все приложения отсортированные по имени.
 func (s *Store) List() []*App {
 	s.mu.RLock()
 	items := make([]*App, 0, len(s.items))
@@ -135,7 +134,6 @@ func (s *Store) Get(id string) (*App, error) {
 	return app, nil
 }
 
-// syncStatus подтягивает свежий статус из supervisor'а.
 func (s *Store) syncStatus(a *App) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -168,7 +166,7 @@ func mapSupervisorStatus(s supervisor.Status) Status {
 	}
 }
 
-// Restart перезапускает приложение через supervisor (или имитирует на фейк-сторе).
+// Restart перезапускает приложение.
 func (s *Store) Restart(id string) error {
 	s.mu.RLock()
 	_, ok := s.items[id]
