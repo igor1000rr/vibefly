@@ -85,6 +85,11 @@ jobs:
             echo "wrapper-present=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Gradle wrapper не сгенерирован — Android-сборка пропущена."
           fi
+      # gradlew был закоммичен с Windows, поэтому executable bit мог не сохраниться.
+      # На Linux runner ./gradlew выдаёт exit code 126 (permission denied). Фикс — chmod явно.
+      - name: Make gradlew executable
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: chmod +x gradlew
       - name: Download agent binary
         if: steps.check-wrapper.outputs.wrapper-present == 'true'
         uses: actions/download-artifact@v4
