@@ -38,15 +38,17 @@ import by.vibefly.app.ui.components.IosNavBar
 import by.vibefly.app.ui.components.IosNavButton
 import by.vibefly.app.ui.components.IosToggle
 import by.vibefly.app.ui.components.PhosphorIcon
+import by.vibefly.app.ui.components.RuntimeStatusCard
 import by.vibefly.app.ui.components.SectionHeader
 import by.vibefly.app.ui.components.linenBackground
 import by.vibefly.app.ui.theme.PhosphorTint
 import by.vibefly.app.ui.theme.SkeuColors
 
 /**
- * Главный экран VibeFly — Device Health + список приложений в стиле iOS 6.
+ * Главный экран VibeFly — Embedded runtime status + Device Health + список приложений.
  *
  *  • IosNavBar сверху ("VibeFly" + кнопка "+ Deploy" + опционально refresh)
+ *  • RuntimeStatusCard (только если embedded agent запускался)
  *  • Grouped table с 4 метриками устройства
  *  • Grouped table с приложениями, у каждого IosToggle для старт/стоп
  *
@@ -71,8 +73,17 @@ fun DashboardScreen(
             },
         )
         when {
-            state.loading && state.apps.isEmpty() -> LoadingPlaceholder()
-            state.error != null && state.apps.isEmpty() -> ErrorPlaceholder(state.error!!)
+            state.loading && state.apps.isEmpty() -> {
+                // Даже во время первой загрузки показываем runtime status —
+                // он не зависит от загрузки данных с агента, и пользователю важно
+                // видеть запускается ли embedded server.
+                RuntimeStatusCard()
+                LoadingPlaceholder()
+            }
+            state.error != null && state.apps.isEmpty() -> {
+                RuntimeStatusCard()
+                ErrorPlaceholder(state.error!!)
+            }
             else -> DashboardContent(
                 metrics = state.metrics,
                 apps = state.apps,
@@ -128,6 +139,8 @@ private fun DashboardContent(
             .fillMaxSize()
             .verticalScroll(scroll),
     ) {
+        RuntimeStatusCard()
+
         SectionHeader("Device health")
         DeviceHealthTable(metrics)
 
@@ -246,13 +259,6 @@ private fun AppListRow(
     }
 }
 
-/**
- * Текст под именем приложения, чувствительный к статусу.
- *  • Deploying → "Deploying…" (детали в AppDetail)
- *  • Failed → "Failed · tap for logs"
- *  • Stopped → "Stopped · last run …"
- *  • Running → compact line из AppItem (domain · MB)
- */
 private fun subtitleFor(app: AppItem): String = when (app.status) {
     AppStatus.Deploying -> "Deploying…"
     AppStatus.Failed -> "Failed · tap for logs"
@@ -286,9 +292,6 @@ private fun AppAvatar(name: String, status: AppStatus) {
     )
 }
 
-/**
- * Цвет аватарки определяется первой буквой имени + статусом.
- */
 private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (status) {
     AppStatus.Deploying -> PhosphorTint.Amber
     AppStatus.Failed -> PhosphorTint.Red
