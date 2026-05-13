@@ -44,21 +44,29 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: '0'
         run: go build -o bin/vibefly-agent-arm64 ./cmd/agent
-      - name: Upload artifact
+      - name: Build (android/arm64)
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: go build -o bin/vibefly-agent-android-arm64 ./cmd/agent
+      - name: Upload Linux arm64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: vibefly-agent-arm64
           path: apps/agent/bin/vibefly-agent-arm64
           if-no-files-found: error
+      - name: Upload Android arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibefly-agent-android-arm64
+          path: apps/agent/bin/vibefly-agent-android-arm64
+          if-no-files-found: error
 
-  # Android: компиляция и lint Kotlin-кода.
-  # Job запускается только если gradle wrapper уже закоммичен (наличие .jar
-  # проверяется явно — без него gradlew не запустится). После того как Игорь
-  # сгенерирует wrapper локально через `gradle wrapper --gradle-version 8.10.2`
-  # и закоммитит файлы, Android начнёт проверяться автоматически на каждом push.
   build-android:
     name: Build Android app
     runs-on: ubuntu-latest
+    needs: build-agent
     defaults:
       run:
         working-directory: apps/android
@@ -71,8 +79,21 @@ jobs:
             echo "wrapper-present=true" >> "$GITHUB_OUTPUT"
           else
             echo "wrapper-present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Gradle wrapper не сгенерирован — Android-сборка пропущена. Сгенерируй локально: gradle wrapper --gradle-version 8.10.2"
+            echo "::notice::Gradle wrapper не сгенерирован — Android-сборка пропущена."
           fi
+      - name: Download Android agent binary
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: vibefly-agent-android-arm64
+          path: apps/android/app/src/main/assets/agent/
+      - name: Rename agent binary
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: |
+          mv apps/android/app/src/main/assets/agent/vibefly-agent-android-arm64 apps/android/app/src/main/assets/agent/vibefly-agent
+          chmod +r apps/android/app/src/main/assets/agent/vibefly-agent
+          ls -la apps/android/app/src/main/assets/agent/
+        working-directory: ${{ github.workspace }}
       - uses: actions/setup-java@v4
         if: steps.check-wrapper.outputs.wrapper-present == 'true'
         with:

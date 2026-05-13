@@ -1,0 +1,9 @@
+# Сюда CI положит vibefly-agent (Go-бинарь под Android arm64) перед сборкой APK.
+# В git коммитится только этот placeholder; сам бинарь приходит из job build-agent.
+#
+# Локальная сборка: можно собрать бинарь руками
+#   cd apps/agent
+#   GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -o ../android/app/src/main/assets/agent/vibefly-agent ./cmd/agent
+#
+# Если бинарь отсутствует — APK всё равно соберётся; RuntimeManager залогирует
+# это в Logcat и не запустит embedded agent. UI продолжит работать в demo mode.
