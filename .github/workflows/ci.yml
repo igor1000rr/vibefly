@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# При новом push в ту же ветку отменяем предыдущий незавершённый run.
+# Экономит CI-минуты и убирает очередь устаревших сборок.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-docs:
     name: Lint markdown

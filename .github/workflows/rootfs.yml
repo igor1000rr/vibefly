@@ -11,6 +11,11 @@ on:
   release:
     types: [published]
 
+# При новом push в ту же ветку отменяем предыдущий незавершённый run.
+concurrency:
+  group: rootfs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build ARM64 rootfs
