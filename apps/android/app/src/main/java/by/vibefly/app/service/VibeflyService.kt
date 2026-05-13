@@ -9,30 +9,71 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import by.vibefly.app.MainActivity
 import by.vibefly.app.R
+import by.vibefly.app.runtime.RuntimeManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 /**
- * Foreground service, который держит namespace-runtime (Droidspaces или proot fallback)
- * живым в фоне. Без этого сервиса Android убьёт любые запущенные процессы
- * минут через 15 после блокировки экрана.
+ * Foreground service для embedded Go-агента.
  *
- * Реальная логика запуска runtime будет в [by.vibefly.app.runtime.RuntimeManager],
- * этот сервис только держит его процесс.
+ * Без foreground service Android приоритетно убьёт все процессы приложения
+ * когда пользователь свернёт экран или нужна будет память — embedded agent умрёт вместе.
+ * Для phone-as-a-server это неприемлемо: сервер должен жить непрерывно.
+ *
+ * Service логика:
+ *   • onStartCommand → становимся foreground с ongoing-уведомлением
+   *   • вызываем RuntimeManager.startIfNeeded() — идемпотентно, безопасно
+ *   • подписываемся на RuntimeManager.status — обновляем текст уведомления по PID
+ *   • START_STICKY — если Android убьёт в OOM-killer, будет перезапущен
  */
 class VibeflyService : Service() {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var statusJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundCompat()
-        // TODO: вызвать RuntimeManager.startIfNeeded()
+        startForegroundCompat(buildNotification("Сервер запускается…"))
+        RuntimeManager.startIfNeeded(applicationContext)
+        observeRuntimeStatus()
+        Log.i(TAG, "VibeflyService стартовал, embedded agent запущен")
         return START_STICKY
     }
 
-    private fun startForegroundCompat() {
-        val notification = buildNotification()
+    override fun onDestroy() {
+        statusJob?.cancel()
+        super.onDestroy()
+    }
+
+    /** Подписываемся на состояние runtime и обновляем текст уведомления. */
+    private fun observeRuntimeStatus() {
+        statusJob?.cancel()
+        statusJob = scope.launch {
+            RuntimeManager.status.collect { status ->
+                val text = when (status.state) {
+                    RuntimeManager.State.Idle -> "Ожидание запуска"
+                    RuntimeManager.State.Starting -> "Стартует…"
+                    RuntimeManager.State.Running -> "Сервер работает" +
+                        (status.pid?.let { " · pid $it" } ?: "")
+                    RuntimeManager.State.Stopped -> "Остановлен"
+                    RuntimeManager.State.Failed -> "Ошибка: ${status.error ?: "неизвестно"}"
+                }
+                val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                mgr.notify(NOTIFICATION_ID, buildNotification(text))
+            }
+        }
+    }
+
+    private fun startForegroundCompat(notification: Notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -44,7 +85,7 @@ class VibeflyService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(text: String): Notification {
         val tapIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -57,7 +98,7 @@ class VibeflyService : Service() {
         return NotificationCompat.Builder(this, RuntimeChannels.RUNTIME)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(getString(R.string.notification_runtime_title))
-            .setContentText(getString(R.string.notification_runtime_text))
+            .setContentText(text)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
@@ -65,6 +106,7 @@ class VibeflyService : Service() {
     }
 
     companion object {
+        private const val TAG = "VibeFlyService"
         private const val NOTIFICATION_ID = 1
 
         fun start(context: Context) {
