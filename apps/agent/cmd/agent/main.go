@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.5-dev"
+var Version = "0.0.6-dev"
 
 func main() {
 	var (
@@ -52,10 +52,11 @@ func main() {
 	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
 
 	logStreamer := logs.NewStreamer(logger, 500)
-	appsStore := apps.NewStore(logger, sup, cfg.SeedDemoApps)
+	// Persistence: передаём apps_dir, Store восстановит приложения из spec.json
+	// если supervisor доступен. При NopSupervisor + seedDemo — фейки как раньше.
+	appsStore := apps.NewStoreWithDir(logger, sup, cfg.AppsDir, cfg.SeedDemoApps)
 	catalog := marketplace.New()
 
-	// Tunnel manager — если включён в конфиге.
 	var tun tunnel.Manager
 	if cfg.Tunnel.Enabled {
 		tun = tunnel.NewCloudflared(tunnel.CloudflaredOptions{
@@ -77,7 +78,6 @@ func main() {
 		}
 	}
 
-	// Фейк-логи только когда и demo-mode, и supervisor недоступен.
 	if !sup.Available() && cfg.SeedDemoApps {
 		appIDs := make([]string, 0, len(appsStore.List()))
 		for _, a := range appsStore.List() {

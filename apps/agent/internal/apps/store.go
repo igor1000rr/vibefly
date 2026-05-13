@@ -1,14 +1,17 @@
 // Package apps — управление пользовательскими приложениями.
 //
-// Store держит метаданные приложений в памяти, а реальные операции
-// (start/stop/restart, статус, логи) делегирует supervisor'у. На non-Linux
-// или там, где systemd недоступен, supervisor — это NopSupervisor.
+// Store держит метаданные приложений в памяти и (если apps_dir задан)
+// на диске в <apps_dir>/<id>/spec.json. Реальные операции (start/stop/restart, статус,
+// логи) делегирует supervisor'у.
 package apps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -42,6 +45,14 @@ type App struct {
 	LastDeploy time.Time `json:"last_deploy,omitempty"`
 }
 
+// persistedSpec — что записывается в <apps_dir>/<id>/spec.json.
+// Содержит и metadata (для UI), и supervisor.AppSpec (для Start).
+type persistedSpec struct {
+	Meta App                 `json:"meta"`
+	Spec supervisor.AppSpec  `json:"spec"`
+	Env  map[string]string   `json:"env,omitempty"`
+}
+
 // ErrNotFound — приложение с таким id не найдено.
 var ErrNotFound = errors.New("app not found")
 
@@ -49,20 +60,36 @@ var ErrNotFound = errors.New("app not found")
 type Store struct {
 	mu         sync.RWMutex
 	items      map[string]*App
+	specs      map[string]supervisor.AppSpec // кэш спецов для Start по ExecSupervisor
 	logger     *slog.Logger
 	supervisor supervisor.Supervisor
+	appsDir    string // если пусто — persistence отключен (для тестов)
 }
 
-// NewStore создаёт хранилище. Если supervisor.Available() — статусы
-// синхронизируются с systemd. Иначе Store пустой (или с фейк-данными,
-// если seedDemo=true).
+// NewStore создаёт хранилище.
+//
+//   - seedDemo только если supervisor недоступен (Windows-dev fake mode).
+//   - Если supervisor.Available() и appsDir != "" — сканирует диск, восстанавливает
+//     приложения. Статусы сбрасываются в Stopped — явный autostart в этой фазе не
+//     делается, пользователь решает из UI что запускать.
 func NewStore(logger *slog.Logger, sup supervisor.Supervisor, seedDemo bool) *Store {
+	return NewStoreWithDir(logger, sup, "", seedDemo)
+}
+
+// NewStoreWithDir — вариант с persistence. appsDir — корневая директория для spec.json.
+func NewStoreWithDir(logger *slog.Logger, sup supervisor.Supervisor, appsDir string, seedDemo bool) *Store {
 	s := &Store{
 		items:      make(map[string]*App),
+		specs:      make(map[string]supervisor.AppSpec),
 		logger:     logger,
 		supervisor: sup,
+		appsDir:    appsDir,
 	}
-	if !sup.Available() && seedDemo {
+	if sup.Available() {
+		if appsDir != "" {
+			s.loadFromDisk()
+		}
+	} else if seedDemo {
 		s.seedFakes()
 	}
 	return s
@@ -70,6 +97,79 @@ func NewStore(logger *slog.Logger, sup supervisor.Supervisor, seedDemo bool) *St
 
 // SupervisorAvailable — фасад для UI: показать ли реальное состояние или demo-mode.
 func (s *Store) SupervisorAvailable() bool { return s.supervisor.Available() }
+
+// loadFromDisk сканирует appsDir, ищет spec.json в каждой подпапке
+// и восстанавливает metadata + spec. Статусы принудительно Stopped.
+func (s *Store) loadFromDisk() {
+	entries, err := os.ReadDir(s.appsDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("не удалось открыть apps_dir", "path", s.appsDir, "err", err)
+		}
+		return
+	}
+	restored := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		specPath := filepath.Join(s.appsDir, e.Name(), "spec.json")
+		data, err := os.ReadFile(specPath)
+		if err != nil {
+			continue
+		}
+		var ps persistedSpec
+		if err := json.Unmarshal(data, &ps); err != nil {
+			s.logger.Warn("битый spec.json", "id", e.Name(), "err", err)
+			continue
+		}
+		if ps.Meta.ID == "" {
+			ps.Meta.ID = e.Name()
+		}
+		ps.Meta.Status = StatusStopped // после перезапуска все приложения остановлены
+		if ps.Spec.Env == nil {
+			ps.Spec.Env = ps.Env
+		}
+		s.items[ps.Meta.ID] = &ps.Meta
+		s.specs[ps.Meta.ID] = ps.Spec
+		restored++
+	}
+	if restored > 0 {
+		s.logger.Info("восстановлены приложения", "count", restored, "dir", s.appsDir)
+	}
+}
+
+// persistSpec пишет spec.json для приложения.
+func (s *Store) persistSpec(meta App, spec supervisor.AppSpec) {
+	if s.appsDir == "" {
+		return
+	}
+	dir := filepath.Join(s.appsDir, meta.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.logger.Warn("persist: mkdir", "id", meta.ID, "err", err)
+		return
+	}
+	ps := persistedSpec{Meta: meta, Spec: spec, Env: spec.Env}
+	data, err := json.MarshalIndent(ps, "", "  ")
+	if err != nil {
+		s.logger.Warn("persist: marshal", "id", meta.ID, "err", err)
+		return
+	}
+	specPath := filepath.Join(dir, "spec.json")
+	if err := os.WriteFile(specPath, data, 0o644); err != nil {
+		s.logger.Warn("persist: write", "id", meta.ID, "err", err)
+	}
+}
+
+func (s *Store) deletePersisted(id string) {
+	if s.appsDir == "" {
+		return
+	}
+	specPath := filepath.Join(s.appsDir, id, "spec.json")
+	if err := os.Remove(specPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logger.Warn("не удалось удалить spec.json", "id", id, "err", err)
+	}
+}
 
 func (s *Store) seedFakes() {
 	now := time.Now().UTC()
@@ -101,7 +201,6 @@ func (s *Store) seedFakes() {
 	}
 }
 
-// List возвращает все приложения отсортированные по имени.
 func (s *Store) List() []*App {
 	s.mu.RLock()
 	items := make([]*App, 0, len(s.items))
@@ -120,7 +219,6 @@ func (s *Store) List() []*App {
 	return items
 }
 
-// Get возвращает приложение по id.
 func (s *Store) Get(id string) (*App, error) {
 	s.mu.RLock()
 	app, ok := s.items[id]
@@ -166,7 +264,6 @@ func mapSupervisorStatus(s supervisor.Status) Status {
 	}
 }
 
-// Restart перезапускает приложение.
 func (s *Store) Restart(id string) error {
 	s.mu.RLock()
 	_, ok := s.items[id]
@@ -178,7 +275,7 @@ func (s *Store) Restart(id string) error {
 	if s.supervisor.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := s.supervisor.Restart(ctx, id); err != nil {
+		if err := s.startWithSpecOrFallback(ctx, id, true); err != nil {
 			return err
 		}
 	}
@@ -192,7 +289,6 @@ func (s *Store) Restart(id string) error {
 	return nil
 }
 
-// Stop останавливает приложение.
 func (s *Store) Stop(id string) error {
 	s.mu.RLock()
 	_, ok := s.items[id]
@@ -216,7 +312,6 @@ func (s *Store) Stop(id string) error {
 	return nil
 }
 
-// Start запускает приложение.
 func (s *Store) Start(id string) error {
 	s.mu.RLock()
 	_, ok := s.items[id]
@@ -227,7 +322,7 @@ func (s *Store) Start(id string) error {
 	if s.supervisor.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := s.supervisor.Start(ctx, id); err != nil {
+		if err := s.startWithSpecOrFallback(ctx, id, false); err != nil {
 			return err
 		}
 	}
@@ -240,7 +335,26 @@ func (s *Store) Start(id string) error {
 	return nil
 }
 
-// Install регистрирует новое приложение и устанавливает его как systemd unit.
+// startWithSpecOrFallback — если supervisor умеет StartSpec (ExecSupervisor),
+// передаём полный spec из кэша. Иначе — обычный Start(id) (SystemdSupervisor
+// подымет unit с диска).
+func (s *Store) startWithSpecOrFallback(ctx context.Context, id string, isRestart bool) error {
+	s.mu.RLock()
+	spec, hasSpec := s.specs[id]
+	s.mu.RUnlock()
+
+	if ss, ok := s.supervisor.(supervisor.SpecStarter); ok && hasSpec {
+		if isRestart {
+			_ = s.supervisor.Stop(ctx, id)
+		}
+		return ss.StartSpec(ctx, spec)
+	}
+	if isRestart {
+		return s.supervisor.Restart(ctx, id)
+	}
+	return s.supervisor.Start(ctx, id)
+}
+
 func (s *Store) Install(spec supervisor.AppSpec, meta App) error {
 	if s.supervisor.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -250,7 +364,6 @@ func (s *Store) Install(spec supervisor.AppSpec, meta App) error {
 		}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	meta.ID = spec.ID
 	if meta.Name == "" {
 		meta.Name = spec.Name
@@ -260,11 +373,13 @@ func (s *Store) Install(spec supervisor.AppSpec, meta App) error {
 	}
 	meta.StartCmd = spec.StartCmd
 	s.items[spec.ID] = &meta
+	s.specs[spec.ID] = spec
+	s.mu.Unlock()
+	s.persistSpec(meta, spec)
 	s.logger.Info("app installed", "id", spec.ID)
 	return nil
 }
 
-// Uninstall удаляет приложение и его systemd unit.
 func (s *Store) Uninstall(id string) error {
 	s.mu.RLock()
 	_, ok := s.items[id]
@@ -281,7 +396,9 @@ func (s *Store) Uninstall(id string) error {
 	}
 	s.mu.Lock()
 	delete(s.items, id)
+	delete(s.specs, id)
 	s.mu.Unlock()
+	s.deletePersisted(id)
 	s.logger.Info("app uninstalled", "id", id)
 	return nil
 }
