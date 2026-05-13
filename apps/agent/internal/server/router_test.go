@@ -20,10 +20,13 @@ func newTestDeps() Dependencies {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sup := &supervisor.NopSupervisor{}
 	return Dependencies{
-		Logger:      logger,
-		Version:     "test",
-		Metrics:     metrics.New(),
-		Apps:        apps.NewStore(logger, sup),
+		Logger:  logger,
+		Version: "test",
+		Metrics: metrics.New(),
+		// seedDemo=true — тесты опираются на фейк-приложения (amina-bot,
+		// analytics-cron, my-bot и т.д.), а с реальным supervisor'ом
+		// этих apps не существовало бы.
+		Apps:        apps.NewStore(logger, sup, true),
 		Logs:        logs.NewStreamer(logger, 100),
 		Supervisor:  sup,
 		Marketplace: marketplace.New(),
