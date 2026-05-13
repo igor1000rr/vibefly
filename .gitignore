@@ -41,6 +41,11 @@ bin/
 *.out
 vendor/
 
+# Локальные конфиги агента (содержат пути и токены конкретной машины).
+apps/agent/agent.toml
+apps/agent/*.toml
+!apps/agent/config/agent.example.toml
+
 # Android
 .gradle/
 local.properties
@@ -56,6 +61,9 @@ app/debug/
 .cxx/
 *.keystore
 *.jks
+
+# build.log — генерируется gradlew при сборке.
+apps/android/build.log
 
 # Rootfs build artefacts
 runtime/rootfs-builder/out/
