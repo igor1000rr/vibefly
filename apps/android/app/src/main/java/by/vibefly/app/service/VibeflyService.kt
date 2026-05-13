@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /**
@@ -30,7 +29,7 @@ import kotlinx.coroutines.launch
  *
  * Service логика:
  *   • onStartCommand → становимся foreground с ongoing-уведомлением
-   *   • вызываем RuntimeManager.startIfNeeded() — идемпотентно, безопасно
+ *   • вызываем RuntimeManager.startIfNeeded() — идемпотентно, безопасно
  *   • подписываемся на RuntimeManager.status — обновляем текст уведомления по PID
  *   • START_STICKY — если Android убьёт в OOM-killer, будет перезапущен
  */
@@ -57,6 +56,8 @@ class VibeflyService : Service() {
     /** Подписываемся на состояние runtime и обновляем текст уведомления. */
     private fun observeRuntimeStatus() {
         statusJob?.cancel()
+        // collect — member-функция Flow, импорт kotlinx.coroutines.flow.collect
+        // удалён в kotlinx-coroutines 1.7+ и приводит к ошибке компиляции.
         statusJob = scope.launch {
             RuntimeManager.status.collect { status ->
                 val text = when (status.state) {
