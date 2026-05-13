@@ -32,7 +32,12 @@ import java.net.URL
  * мы ждём AUTO_RESTART_DELAY_MS и автоматически запускаем агент заново.
  * Останавливаем auto-restart loop только при явном stop() от пользователя.
  *
- * При выходе из приложения процесс остаётся живым пока есть foreground service.
+ * Заметка про тип Process:
+ *   В файле есть android-импорты (Context, Log), и short name `Process` конфликтует
+ *   между android.os.Process и java.lang.Process. Чтобы избежать ambiguity —
+ *   используем явный fully-qualified java.lang.Process везде где это нужно.
+ *   Так же pid() есть только у java.lang.Process с API 26+, поэтому дергаем
+ *   через reflection с безопасным fallback в null.
  */
 object RuntimeManager {
 
@@ -40,9 +45,6 @@ object RuntimeManager {
     private const val AGENT_PORT = 3001
     private const val HEALTH_URL = "http://127.0.0.1:$AGENT_PORT/health"
 
-    // Сколько ждать перед auto-restart после неожиданной смерти процесса.
-    // Достаточно для того чтобы порт освободился, но не так долго чтобы
-    // нарушить ощущение "сервер всегда онлайн".
     private const val AUTO_RESTART_DELAY_MS = 3_000L
 
     enum class State { Idle, Starting, Running, Stopped, Failed }
@@ -59,16 +61,23 @@ object RuntimeManager {
     val status: StateFlow<Status> = _status.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var process: Process? = null
+    private var process: java.lang.Process? = null
 
-    // Флаг "stop был явный". Если true — auto-restart не сработает.
     @Volatile
     private var explicitlyStopped = false
 
     /**
-     * Запустить агента если ещё не запущен. Идемпотентно — повторные вызовы
-     * безопасны.
+     * Получить PID процесса через reflection. На Android API 26+ есть метод
+     * Process.pid() — но прямой вызов конфликтует с android.os.Process
+     * на этапе компиляции. Reflection обходит проблему.
      */
+    private fun pidOf(proc: java.lang.Process): Int? = try {
+        val m = proc.javaClass.getMethod("pid")
+        (m.invoke(proc) as? Long)?.toInt()
+    } catch (_: Throwable) {
+        null
+    }
+
     fun startIfNeeded(context: Context) {
         if (_status.value.state == State.Running || _status.value.state == State.Starting) {
             Log.i(TAG, "уже запущен или стартует, пропускаю")
@@ -88,7 +97,6 @@ object RuntimeManager {
             val appsDir = File(context.filesDir, "apps").apply { mkdirs() }
             val logsDir = File(context.filesDir, "logs").apply { mkdirs() }
 
-            // Шаг 1: извлекаем бинарь, если ещё не извлечён.
             if (!agentBinary.exists() || agentBinary.length() == 0L) {
                 extractFromAssets(context, "agent/vibefly-agent", agentBinary)
             }
@@ -106,27 +114,25 @@ object RuntimeManager {
             agentBinary.setExecutable(true, false)
             agentBinary.setReadable(true, false)
 
-            // Шаг 2: пишем минимальный конфиг.
             agentConfig.writeText(buildConfig(appsDir, logsDir))
 
-            // Шаг 3: запуск.
             val pb = ProcessBuilder(agentBinary.absolutePath, "--config", agentConfig.absolutePath)
                 .redirectErrorStream(true)
                 .directory(agentDir)
-            // Android: дочерний процесс наследует UID приложения (Linux UID-based sandbox).
 
-            val proc = pb.start()
+            val proc: java.lang.Process = pb.start()
             process = proc
-            Log.i(TAG, "agent started, pid=${proc.pid()}")
+            val procPid = pidOf(proc)
+            Log.i(TAG, "agent started, pid=$procPid")
             _status.value = Status(
                 state = State.Starting,
                 version = null,
-                pid = proc.pid().toInt(),
+                pid = procPid,
                 error = null,
                 restartCount = currentRestartCount,
             )
 
-            // Читаем stdout в Logcat, чтобы можно было дебажить через adb logcat -s VibeFlyRuntime.
+            // Читаем stdout в Logcat (adb logcat -s VibeFlyRuntime).
             scope.launch {
                 proc.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { Log.i(TAG, "[agent] $it") }
@@ -144,7 +150,6 @@ object RuntimeManager {
                     return@launch
                 }
 
-                // Неожиданная смерть — auto-restart.
                 _status.value = Status(
                     state = State.Stopped,
                     version = null,
@@ -153,19 +158,18 @@ object RuntimeManager {
                     restartCount = currentRestartCount,
                 )
                 delay(AUTO_RESTART_DELAY_MS)
-                if (explicitlyStopped) return@launch  // пока ждали — пользователь отменил
+                if (explicitlyStopped) return@launch
                 Log.i(TAG, "auto-restart attempt #${currentRestartCount + 1}")
                 _status.value = _status.value.copy(restartCount = currentRestartCount + 1)
                 start(context)
             }
 
-            // Ждём пока /health ответит, до 10 секунд.
             val started = waitForHealth(timeoutMs = 10_000)
             if (started) {
                 _status.value = Status(
                     state = State.Running,
                     version = "embedded",
-                    pid = proc.pid().toInt(),
+                    pid = procPid,
                     error = null,
                     restartCount = currentRestartCount,
                 )
@@ -174,7 +178,7 @@ object RuntimeManager {
                 _status.value = Status(
                     state = State.Failed,
                     version = null,
-                    pid = proc.pid().toInt(),
+                    pid = procPid,
                     error = "agent не ответил на /health за 10s",
                     restartCount = currentRestartCount,
                 )
@@ -189,9 +193,6 @@ object RuntimeManager {
         }
     }
 
-    /**
-     * Остановить агента явно. Отключает auto-restart до следующего startIfNeeded().
-     */
     fun stop() {
         explicitlyStopped = true
         process?.destroy()
@@ -216,8 +217,6 @@ object RuntimeManager {
         appendLine("auth_token = \"\"")
         appendLine("apps_dir = \"${appsDir.absolutePath}\"")
         appendLine("logs_dir = \"${logsDir.absolutePath}\"")
-        // На Android нет systemd → supervisor.Available() = false → store пустой.
-        // Demo apps включаем для наглядности первого запуска.
         appendLine("seed_demo_apps = true")
     }
 
