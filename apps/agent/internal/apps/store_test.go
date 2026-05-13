@@ -10,8 +10,9 @@ import (
 
 func newTestStore() *Store {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// NopSupervisor — store работает на фейк-данных.
-	return NewStore(logger, &supervisor.NopSupervisor{})
+	// NopSupervisor + seedDemo=true — store работает на фейк-данных,
+	// которые проверяет тестовый набор.
+	return NewStore(logger, &supervisor.NopSupervisor{}, true)
 }
 
 func TestStore_List(t *testing.T) {
