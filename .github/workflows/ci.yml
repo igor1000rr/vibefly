@@ -6,8 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-# При новом push в ту же ветку отменяем предыдущий незавершённый run.
-# Экономит CI-минуты и убирает очередь устаревших сборок.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -44,16 +42,6 @@ jobs:
         run: go test -race -count=1 ./...
       - name: Build (linux/amd64)
         run: go build -v ./...
-      # Кросс-компиляция под Android arm64.
-      #
-      # GOOS=android требует CGO_ENABLED=1 и NDK toolchain (нужен bionic libc) —
-      # это сложная сборка. ВМЕСТО этого собираем под GOOS=linux GOARCH=arm64
-      # с CGO_ENABLED=0 — pure Go бинарь, который использует Linux syscalls
-      # напрямую и работает на Android (Android kernel = Linux). Так делает
-      # Termux и большинство Go-приложений запускаемых на Android.
-      #
-      # Один и тот же бинарь служит для двух целей: для образа Linux rootfs
-      # внутри APK (этап 2) и как embedded agent в Android app sandbox (этап 1).
       - name: Build (linux/arm64, pure Go — также работает на Android)
         env:
           GOOS: linux
@@ -67,10 +55,33 @@ jobs:
           path: apps/agent/bin/vibefly-agent-arm64
           if-no-files-found: error
 
+  # Отдельный job — скачивает cloudflared бинарь от Cloudflare и загружает как artifact.
+  # Нужен для phone-as-a-server: без cloudflared телефон не сможет стать доступным
+  # из интернета через trycloudflare туннель.
+  fetch-cloudflared:
+    name: Fetch cloudflared arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download cloudflared linux-arm64
+        run: |
+          mkdir -p out
+          curl -fSL -o out/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +r out/cloudflared
+          ls -la out/
+          file out/cloudflared || true
+          echo "size: $(du -h out/cloudflared | cut -f1)"
+      - name: Upload cloudflared artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflared-linux-arm64
+          path: out/cloudflared
+          if-no-files-found: error
+
   build-android:
     name: Build Android app
     runs-on: ubuntu-latest
-    needs: build-agent
+    needs: [build-agent, fetch-cloudflared]
     defaults:
       run:
         working-directory: apps/android
@@ -85,8 +96,6 @@ jobs:
             echo "wrapper-present=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Gradle wrapper не сгенерирован — Android-сборка пропущена."
           fi
-      # gradlew был закоммичен с Windows, поэтому executable bit мог не сохраниться.
-      # На Linux runner ./gradlew выдаёт exit code 126 (permission denied). Фикс — chmod явно.
       - name: Make gradlew executable
         if: steps.check-wrapper.outputs.wrapper-present == 'true'
         run: chmod +x gradlew
@@ -103,6 +112,18 @@ jobs:
           chmod +r vibefly-agent
           ls -la
         working-directory: apps/android/app/src/main/assets/agent/
+      - name: Download cloudflared binary
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflared-linux-arm64
+          path: apps/android/app/src/main/assets/cloudflared/
+      - name: Verify cloudflared in place
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: |
+          chmod +r cloudflared
+          ls -la
+        working-directory: apps/android/app/src/main/assets/cloudflared/
       - uses: actions/setup-java@v4
         if: steps.check-wrapper.outputs.wrapper-present == 'true'
         with:

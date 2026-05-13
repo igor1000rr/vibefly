@@ -18,26 +18,19 @@ import java.net.URL
 
 /**
  * RuntimeManager — запускает Go-агента, упакованного в assets/agent/vibefly-agent,
- * как обычный child-процесс Android-приложения. Без root, без namespace,
- * без Droidspaces — этап 1 phone-as-a-server.
+ * как обычный child-процесс Android-приложения.
  *
  * Что делается при старте:
- *   1. Извлекается бинарь из assets в filesDir/agent/vibefly-agent
- *   2. Делается chmod 755 (через File.setExecutable)
- *   3. Пишется agent.toml с listen = 127.0.0.1:3001
+ *   1. Извлекаются бинари из assets:
+ *      • assets/agent/vibefly-agent → filesDir/agent/vibefly-agent
+ *      • assets/cloudflared/cloudflared → filesDir/cloudflared/cloudflared (если есть)
+ *   2. Делается chmod 755 на оба бинаря
+ *   3. Пишется agent.toml с listen + tunnel секцией
  *   4. ProcessBuilder запускает агента; stdout/stderr читаем в Logcat
  *   5. Опрашиваем /health пока он не ответит; обновляем state
  *
- * Auto-restart: если процесс умирает (OOM, краш, kill -9), waitFor возвращается,
+ * Auto-restart: если процесс умирает, waitFor возвращается,
  * мы ждём AUTO_RESTART_DELAY_MS и автоматически запускаем агент заново.
- * Останавливаем auto-restart loop только при явном stop() от пользователя.
- *
- * Заметка про тип Process:
- *   В файле есть android-импорты (Context, Log), и short name `Process` конфликтует
- *   между android.os.Process и java.lang.Process. Чтобы избежать ambiguity —
- *   используем явный fully-qualified java.lang.Process везде где это нужно.
- *   Так же pid() есть только у java.lang.Process с API 26+, поэтому дергаем
- *   через reflection с безопасным fallback в null.
  */
 object RuntimeManager {
 
@@ -55,6 +48,7 @@ object RuntimeManager {
         val pid: Int?,
         val error: String?,
         val restartCount: Int = 0,
+        val tunnelBinaryAvailable: Boolean = false,
     )
 
     private val _status = MutableStateFlow(Status(State.Idle, null, null, null))
@@ -66,11 +60,6 @@ object RuntimeManager {
     @Volatile
     private var explicitlyStopped = false
 
-    /**
-     * Получить PID процесса через reflection. На Android API 26+ есть метод
-     * Process.pid() — но прямой вызов конфликтует с android.os.Process
-     * на этапе компиляции. Reflection обходит проблему.
-     */
     private fun pidOf(proc: java.lang.Process): Int? = try {
         val m = proc.javaClass.getMethod("pid")
         (m.invoke(proc) as? Long)?.toInt()
@@ -97,6 +86,7 @@ object RuntimeManager {
             val appsDir = File(context.filesDir, "apps").apply { mkdirs() }
             val logsDir = File(context.filesDir, "logs").apply { mkdirs() }
 
+            // Извлекаем агент из assets.
             if (!agentBinary.exists() || agentBinary.length() == 0L) {
                 extractFromAssets(context, "agent/vibefly-agent", agentBinary)
             }
@@ -105,17 +95,36 @@ object RuntimeManager {
                     state = State.Failed,
                     version = null,
                     pid = null,
-                    error = "agent binary не найден в assets — APK собран без CI или вручную без бинаря",
+                    error = "agent binary не найден в assets — APK собран без CI",
                     restartCount = currentRestartCount,
                 )
-                Log.w(TAG, "agent binary отсутствует, embedded runtime не запускается")
+                Log.w(TAG, "agent binary отсутствует")
                 return
             }
             agentBinary.setExecutable(true, false)
             agentBinary.setReadable(true, false)
 
-            agentConfig.writeText(buildConfig(appsDir, logsDir))
+            // Извлекаем cloudflared (опционально — без него agent работает локально).
+            val cloudflaredDir = File(context.filesDir, "cloudflared").apply { mkdirs() }
+            val cloudflaredBinary = File(cloudflaredDir, "cloudflared")
+            if (!cloudflaredBinary.exists() || cloudflaredBinary.length() == 0L) {
+                extractFromAssets(context, "cloudflared/cloudflared", cloudflaredBinary)
+            }
+            val tunnelAvailable = cloudflaredBinary.exists() && cloudflaredBinary.length() > 0L
+            if (tunnelAvailable) {
+                cloudflaredBinary.setExecutable(true, false)
+                cloudflaredBinary.setReadable(true, false)
+                Log.i(TAG, "cloudflared извлечён, ${cloudflaredBinary.length() / 1024 / 1024} MB")
+            } else {
+                Log.i(TAG, "cloudflared отсутствует, туннель не будет доступен")
+            }
 
+            // Генерируем конфиг с учётом tunnel'а.
+            agentConfig.writeText(
+                buildConfig(appsDir, logsDir, cloudflaredBinary.takeIf { tunnelAvailable })
+            )
+
+            // Запуск агента.
             val pb = ProcessBuilder(agentBinary.absolutePath, "--config", agentConfig.absolutePath)
                 .redirectErrorStream(true)
                 .directory(agentDir)
@@ -123,29 +132,30 @@ object RuntimeManager {
             val proc: java.lang.Process = pb.start()
             process = proc
             val procPid = pidOf(proc)
-            Log.i(TAG, "agent started, pid=$procPid")
+            Log.i(TAG, "agent started, pid=$procPid, tunnel=$tunnelAvailable")
             _status.value = Status(
                 state = State.Starting,
                 version = null,
                 pid = procPid,
                 error = null,
                 restartCount = currentRestartCount,
+                tunnelBinaryAvailable = tunnelAvailable,
             )
 
-            // Читаем stdout в Logcat (adb logcat -s VibeFlyRuntime).
             scope.launch {
                 proc.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { Log.i(TAG, "[agent] $it") }
                 }
             }
-            // Следим за смертью процесса + auto-restart.
             scope.launch {
                 val exitCode = withContext(Dispatchers.IO) { proc.waitFor() }
                 Log.w(TAG, "agent exited with code=$exitCode")
                 process = null
 
                 if (explicitlyStopped) {
-                    _status.value = Status(State.Stopped, null, null, null, currentRestartCount)
+                    _status.value = Status(
+                        State.Stopped, null, null, null, currentRestartCount, tunnelAvailable
+                    )
                     Log.i(TAG, "agent stopped by user, не перезапускаем")
                     return@launch
                 }
@@ -156,6 +166,7 @@ object RuntimeManager {
                     pid = null,
                     error = "agent exited with $exitCode, перезапуск через ${AUTO_RESTART_DELAY_MS / 1000}s",
                     restartCount = currentRestartCount,
+                    tunnelBinaryAvailable = tunnelAvailable,
                 )
                 delay(AUTO_RESTART_DELAY_MS)
                 if (explicitlyStopped) return@launch
@@ -172,8 +183,9 @@ object RuntimeManager {
                     pid = procPid,
                     error = null,
                     restartCount = currentRestartCount,
+                    tunnelBinaryAvailable = tunnelAvailable,
                 )
-                Log.i(TAG, "agent отвечает на /health, готов к работе")
+                Log.i(TAG, "agent отвечает на /health")
             } else {
                 _status.value = Status(
                     state = State.Failed,
@@ -181,6 +193,7 @@ object RuntimeManager {
                     pid = procPid,
                     error = "agent не ответил на /health за 10s",
                     restartCount = currentRestartCount,
+                    tunnelBinaryAvailable = tunnelAvailable,
                 )
                 Log.e(TAG, "agent не ответил на /health")
             }
@@ -211,13 +224,31 @@ object RuntimeManager {
         }
     }
 
-    private fun buildConfig(appsDir: File, logsDir: File): String = buildString {
-        appendLine("# VibeFly agent config — генерируется RuntimeManager при первом запуске.")
+    /**
+     * Генерируем конфиг. Если cloudflaredBinary передан — включаем tunnel в
+     * выключенном состоянии (enabled = true, autostart = false). Пользователь
+     * сам включит его из Settings через POST /tunnel/start.
+     */
+    private fun buildConfig(
+        appsDir: File,
+        logsDir: File,
+        cloudflaredBinary: File?,
+    ): String = buildString {
+        appendLine("# VibeFly agent config — генерируется RuntimeManager.")
         appendLine("listen = \"127.0.0.1:$AGENT_PORT\"")
         appendLine("auth_token = \"\"")
         appendLine("apps_dir = \"${appsDir.absolutePath}\"")
         appendLine("logs_dir = \"${logsDir.absolutePath}\"")
         appendLine("seed_demo_apps = true")
+        if (cloudflaredBinary != null) {
+            appendLine()
+            appendLine("[tunnel]")
+            appendLine("enabled = true")
+            appendLine("autostart = false")
+            appendLine("binary = \"${cloudflaredBinary.absolutePath}\"")
+            appendLine("target = \"http://127.0.0.1:$AGENT_PORT\"")
+            appendLine("startup_timeout = \"60s\"")
+        }
     }
 
     private suspend fun waitForHealth(timeoutMs: Long): Boolean {

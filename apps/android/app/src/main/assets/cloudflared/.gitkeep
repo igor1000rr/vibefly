@@ -1,0 +1,5 @@
+# Сюда CI положит cloudflared linux/arm64 бинарь перед сборкой APK.
+# Бинарь приходит с GitHub releases Cloudflare. Размер ~30 MB.
+#
+# Без него RuntimeManager залогирует в Logcat и не включит tunnel manager.
+# UI покажет в Settings "Tunnel not available".

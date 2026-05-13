@@ -23,11 +23,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import by.vibefly.app.BuildConfig
 import by.vibefly.app.data.ServiceLocator
 import by.vibefly.app.data.SettingsStore
@@ -46,16 +49,18 @@ import kotlinx.coroutines.launch
 /**
  * Настройки в скевоморфизме iOS 6.
  *
- * Функциональные строки: Demo mode, Agent URL, Auth token, Provider.
- * Placeholder строки в rememberSaveable (без backend): Auto-mode, Throttle,
- * Auto-restart on OOM, Daily backup. Когда фичи появятся в SettingsStore —
- * связь поднимется без правок UI.
+ * Секции:
+ *   • CONNECTIONS — Demo mode, Agent URL, Auth token
+ *   • PUBLIC TUNNEL — Cloudflare tunnel toggle + публичный URL
+ *   • AI ASSISTANT, DEVICE, BACKUPS — прежние
  */
 @Composable
 fun SettingsScreen() {
     val settingsStore = remember { ServiceLocator.settings() }
     val snapshot by settingsStore.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val tunnelVm: TunnelViewModel = viewModel()
+    val tunnelState by tunnelVm.state.collectAsStateWithLifecycle()
 
     var showUrlDialog by remember { mutableStateOf(false) }
     var showTokenDialog by remember { mutableStateOf(false) }
@@ -66,8 +71,6 @@ fun SettingsScreen() {
     var autoRestartOom by rememberSaveable { mutableStateOf(true) }
     var dailyBackup by rememberSaveable { mutableStateOf(false) }
 
-    // Эти лямбды передаются в GroupedRow.onClick. Если demoMode — null, чтобы
-    // строка стала некликабельной и без chevron.
     val openUrlDialog: (() -> Unit)? = if (snapshot.demoMode) null else ({ showUrlDialog = true })
     val openTokenDialog: (() -> Unit)? = if (snapshot.demoMode) null else ({ showTokenDialog = true })
 
@@ -79,7 +82,7 @@ fun SettingsScreen() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            // ─── CONNECTIONS ─────────────────────────────────────────────────
+            // ─── CONNECTIONS ────────────────────────────────────────
             SectionHeader("Connections")
             GroupedTable {
                 GroupedRow(
@@ -124,7 +127,14 @@ fun SettingsScreen() {
                 )
             }
 
-            // ─── AI ASSISTANT ────────────────────────────────────────────────
+            // ─── PUBLIC TUNNEL ───────────────────────────────────────
+            TunnelSection(
+                state = tunnelState,
+                onStart = { tunnelVm.start() },
+                onStop = { tunnelVm.stop() },
+            )
+
+            // ─── AI ASSISTANT ─────────────────────────────────────────
             SectionHeader("AI Assistant")
             GroupedTable {
                 GroupedRow(
@@ -140,7 +150,7 @@ fun SettingsScreen() {
                     leading = { PhosphorIcon(tint = PhosphorTint.Green, glyph = "$") },
                     valueText = "— / 2M",
                     chevron = true,
-                    onClick = { /* TODO: usage screen */ },
+                    onClick = { },
                 )
                 GroupedDivider()
                 GroupedRow(
@@ -150,7 +160,7 @@ fun SettingsScreen() {
                 )
             }
 
-            // ─── DEVICE ──────────────────────────────────────────────────────
+            // ─── DEVICE ──────────────────────────────────────────────
             SectionHeader("Device")
             GroupedTable {
                 GroupedRow(
@@ -158,7 +168,7 @@ fun SettingsScreen() {
                     leading = { PhosphorIcon(tint = PhosphorTint.Green, glyph = "▮") },
                     valueText = "30 – 80%",
                     chevron = true,
-                    onClick = { /* TODO: range picker */ },
+                    onClick = { },
                 )
                 GroupedDivider()
                 GroupedRow(
@@ -174,7 +184,7 @@ fun SettingsScreen() {
                 )
             }
 
-            // ─── BACKUPS ─────────────────────────────────────────────────────
+            // ─── BACKUPS ────────────────────────────────────────────
             SectionHeader("Backups")
             GroupedTable {
                 GroupedRow(
@@ -188,7 +198,7 @@ fun SettingsScreen() {
                     leading = { PhosphorIcon(tint = PhosphorTint.Amber, glyph = "↥") },
                     valueText = if (dailyBackup) "R2 · vibefly" else "Not configured",
                     chevron = true,
-                    onClick = { /* TODO: destination picker */ },
+                    onClick = { },
                 )
                 GroupedDivider()
                 GroupedRow(
@@ -196,11 +206,10 @@ fun SettingsScreen() {
                     leading = { PhosphorIcon(tint = PhosphorTint.Gray, glyph = "◷") },
                     valueText = "—",
                     chevron = true,
-                    onClick = { /* TODO: backup history */ },
+                    onClick = { },
                 )
             }
 
-            // ─── About footer ────────────────────────────────────────────────
             Spacer(modifier = Modifier.height(20.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -255,6 +264,76 @@ fun SettingsScreen() {
             onDismiss = { showProviderDialog = false },
         )
     }
+}
+
+/**
+ * Секция Public Tunnel — показывает статус туннеля, public URL, кнопку start/stop.
+ */
+@Composable
+private fun TunnelSection(
+    state: TunnelState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    val status = state.status
+    val provider = status.provider
+
+    SectionHeader("Public tunnel")
+    GroupedTable {
+        GroupedRow(
+            label = "Cloudflare",
+            leading = { PhosphorIcon(tint = PhosphorTint.Orange, glyph = "→") },
+            valueText = when {
+                provider == "none" -> "Not available"
+                state.busy -> "…"
+                status.active -> "On"
+                else -> "Off"
+            },
+            trailing = if (provider != "none") ({
+                IosToggle(
+                    checked = status.active,
+                    onCheckedChange = { wanted ->
+                        if (wanted) onStart() else onStop()
+                    },
+                )
+            }) else null,
+        )
+        if (status.active && status.publicUrl != null) {
+            GroupedDivider()
+            GroupedRow(
+                label = "Public URL",
+                leading = { PhosphorIcon(tint = PhosphorTint.Green, glyph = "↗") },
+                valueText = status.publicUrl.removePrefix("https://"),
+                valueColor = SkeuColors.LinkBlue,
+                chevron = false,
+                onClick = {
+                    clipboard.setText(AnnotatedString(status.publicUrl))
+                },
+            )
+        }
+        if (status.lastError != null) {
+            GroupedDivider()
+            GroupedRow(
+                label = "Error",
+                leading = { PhosphorIcon(tint = PhosphorTint.Red, glyph = "!") },
+                valueText = status.lastError,
+                valueColor = SkeuColors.AccentRed,
+            )
+        }
+    }
+    val hint = when {
+        provider == "none" -> "Туннель недоступен — cloudflared бинарь отсутствует в APK."
+        status.active -> "Телефон доступен из интернета. Тапни URL чтобы скопировать."
+        else -> "Включи чтобы получить публичный HTTPS URL через Cloudflare."
+    }
+    Text(
+        text = hint,
+        color = SkeuColors.SecondaryText,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
+    )
 }
 
 @Composable
