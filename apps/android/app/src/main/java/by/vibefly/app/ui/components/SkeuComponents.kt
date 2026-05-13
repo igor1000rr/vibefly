@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -523,6 +524,7 @@ fun SegmentedControl(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
+                        .background(SkeuGradients.tabBar())
                         .background(SkeuColors.GlossyBlueTop),
                 )
             }
@@ -538,6 +540,11 @@ data class TabBarItem(
     val glyph: String,
 )
 
+/**
+ * Скевоморфный таб-бар внизу экрана. Высота 50dp + отступ под системную navigation
+ * bar Android (три кнопки или gesture-полоска внизу). Без этого отступа кнопки таб-бара
+ * попадают под системные элементы и становятся ненажимаемыми.
+ */
 @Composable
 fun TabBar(
     items: List<TabBarItem>,
@@ -545,52 +552,61 @@ fun TabBar(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(50.dp)
-            .background(SkeuGradients.tabBar())
-            .drawBehind {
-                drawLine(
-                    color = SkeuColors.TabBarStroke,
-                    start = Offset(0f, 0.5f),
-                    end = Offset(size.width, 0.5f),
-                    strokeWidth = 1f,
-                )
-            },
-        verticalAlignment = Alignment.CenterVertically,
+            .background(SkeuGradients.tabBar()),
     ) {
-        items.forEach { item ->
-            val isSelected = item.key == selectedKey
-            val tint = if (isSelected) SkeuColors.TabBarSelectedTint else SkeuColors.TabBarUnselectedTint
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(item.key) },
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp)
+                .drawBehind {
+                    drawLine(
+                        color = SkeuColors.TabBarStroke,
+                        start = Offset(0f, 0.5f),
+                        end = Offset(size.width, 0.5f),
+                        strokeWidth = 1f,
                     )
-                    .padding(vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = item.glyph,
-                    color = tint,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = item.label,
-                    color = tint,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                )
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items.forEach { item ->
+                val isSelected = item.key == selectedKey
+                val tint = if (isSelected) SkeuColors.TabBarSelectedTint else SkeuColors.TabBarUnselectedTint
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onSelect(item.key) },
+                        )
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = item.glyph,
+                        color = tint,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = item.label,
+                        color = tint,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
+        // Подложка под системную navigation bar (3-button или gesture-полоска)
+        // того же цвета что и tab bar — визуально продолжает фон таб-бара.
+        Spacer(modifier = Modifier.padding(top = navBarPadding.calculateBottomPadding()))
     }
 }
 
