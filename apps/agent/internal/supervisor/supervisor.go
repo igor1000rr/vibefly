@@ -1,14 +1,9 @@
-// Package supervisor — реальный менеджер пользовательских приложений поверх systemd.
+// Package supervisor — реальный менеджер пользовательских приложений.
 //
-// Принцип:
-//   - Для каждого приложения генерируется systemd-unit `vibefly-app-<id>.service`.
-//   - Unit живёт в `/etc/systemd/system/`, рабочая директория — `<apps_dir>/<id>`.
-//   - Операции (start/stop/restart) — через вызов `systemctl`.
-//   - Статус и времена берём из `systemctl show`.
-//   - Логи — через `journalctl -fu <unit>` в follow-режиме.
-//
-// Если systemd недоступен (напр. в proot fallback или на десктопе под macOS) —
-// фабрика возвращает NopSupervisor, и агент вываливается на фейк-стор + фейк-логи.
+// Иерархия реализаций:
+//   - SystemdSupervisor — полный systemd, generated unit files, journalctl. Linux + systemctl.
+//   - ExecSupervisor    — полноценный менеджер процессов без systemd. Linux без systemctl (Android).
+//   - NopSupervisor    — заглушка для non-linux (Windows/macOS dev).
 package supervisor
 
 import (
@@ -29,16 +24,15 @@ import (
 
 // AppSpec — так пользователь описывает приложение при создании.
 type AppSpec struct {
-	ID         string            // уникальный id, slug-like
-	Name       string            // human-friendly
-	WorkingDir string            // рабочая директория (например /var/lib/vibefly/apps/amina-bot)
-	StartCmd   string            // команда запуска, напр. "node index.js" или "pm2-runtime ecosystem.config.js"
-	Env        map[string]string // переменные окружения
-	MemoryMax  string            // напр. "512M"; пусто — лимит не выставляется
-	CPUQuota   string            // напр. "80%"
+	ID         string
+	Name       string
+	WorkingDir string
+	StartCmd   string
+	Env        map[string]string
+	MemoryMax  string
+	CPUQuota   string
 }
 
-// Status — текущее состояние.
 type Status string
 
 const (
@@ -48,7 +42,6 @@ const (
 	StatusUnknown Status = "unknown"
 )
 
-// UnitStatus — сводный ответ `systemctl show`.
 type UnitStatus struct {
 	Active    Status
 	StartedAt time.Time
@@ -57,7 +50,6 @@ type UnitStatus struct {
 	ExitCode  int
 }
 
-// Supervisor — интерфейс для агента.
 type Supervisor interface {
 	Available() bool
 	Install(ctx context.Context, spec AppSpec) error
@@ -69,14 +61,17 @@ type Supervisor interface {
 	FollowLogs(ctx context.Context, id string) (<-chan string, error)
 }
 
-// New — фабрика. На Linux с доступным systemctl возвращает SystemdSupervisor.
-// Иначе — NopSupervisor.
+// New — фабрика. Выбирает реализацию по среде:
+//   - non-linux        → NopSupervisor (либо без ExecSupervisor: fork/exec не syscall-clean)
+//   - linux + systemd  → SystemdSupervisor (production VPS)
+//   - linux + no sd    → ExecSupervisor (Android, минимальные Linux образы)
 func New(logger *slog.Logger, unitDir, appsDir string) Supervisor {
 	if runtime.GOOS != "linux" {
 		return &NopSupervisor{logger: logger, reason: "non-linux host"}
 	}
 	if _, err := exec.LookPath("systemctl"); err != nil {
-		return &NopSupervisor{logger: logger, reason: "systemctl not found"}
+		logger.Info("supervisor: systemctl отсутствует, используем ExecSupervisor (Android-mode)")
+		return NewExecSupervisor(logger, appsDir, "")
 	}
 	return &SystemdSupervisor{
 		logger:  logger,
@@ -85,7 +80,7 @@ func New(logger *slog.Logger, unitDir, appsDir string) Supervisor {
 	}
 }
 
-// NopSupervisor — заглушка.
+// NopSupervisor — заглушка для non-linux (Windows dev-host, macOS dev-host).
 type NopSupervisor struct {
 	logger *slog.Logger
 	reason string
@@ -94,7 +89,7 @@ type NopSupervisor struct {
 func (n *NopSupervisor) Available() bool { return false }
 func (n *NopSupervisor) Reason() string  { return n.reason }
 
-func (n *NopSupervisor) Install(_ context.Context, spec AppSpec) error {
+func (n *NopSupervisor) Install(_ context.Context, _ AppSpec) error {
 	return fmt.Errorf("supervisor unavailable: %s", n.reason)
 }
 func (n *NopSupervisor) Uninstall(_ context.Context, _ string) error {
@@ -119,8 +114,8 @@ func (n *NopSupervisor) FollowLogs(_ context.Context, _ string) (<-chan string, 
 // SystemdSupervisor — реальная реализация.
 type SystemdSupervisor struct {
 	logger  *slog.Logger
-	unitDir string // напр. /etc/systemd/system
-	appsDir string // напр. /var/lib/vibefly/apps
+	unitDir string
+	appsDir string
 }
 
 func (s *SystemdSupervisor) Available() bool { return true }
@@ -197,8 +192,6 @@ func (s *SystemdSupervisor) Status(ctx context.Context, id string) (UnitStatus, 
 	return parseShow(out), nil
 }
 
-// FollowLogs запускает `journalctl -fu <unit>` и выдаёт строки в канал.
-// Отменяется через ctx; при этом процесс бьется и канал закрывается.
 func (s *SystemdSupervisor) FollowLogs(ctx context.Context, id string) (<-chan string, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
@@ -239,7 +232,6 @@ func (s *SystemdSupervisor) run(ctx context.Context, name string, args ...string
 	return string(out), nil
 }
 
-// validateID — строгая проверка против injection в имена файлов и аргументы systemctl.
 func validateID(id string) error {
 	if id == "" {
 		return errors.New("empty app id")
@@ -260,7 +252,6 @@ func validateID(id string) error {
 	return nil
 }
 
-// parseShow вытаскивает поля из `systemctl show --property=...` (формат KEY=VAL).
 func parseShow(out string) UnitStatus {
 	st := UnitStatus{Active: StatusUnknown}
 	for _, line := range strings.Split(out, "\n") {
@@ -279,8 +270,6 @@ func parseShow(out string) UnitStatus {
 				st.Active = StatusFailed
 			}
 		case "ExecMainStartTimestamp":
-			// systemd: "Пн 2026-05-11 18:14:33 UTC" — парсить кросс-локально сложно,
-			// поэтому надёжнее брать ExecMainStartTimestampMonotonic. Для фазы 1 этого достаточно:
 			if t, err := time.Parse("Mon 2006-01-02 15:04:05 MST", v); err == nil {
 				st.StartedAt = t
 			}
@@ -301,24 +290,19 @@ func parseShow(out string) UnitStatus {
 	return st
 }
 
-// renderUnit собирает systemd unit-файл.
 func renderUnit(spec AppSpec) string {
 	var b strings.Builder
-
 	fmt.Fprintf(&b, "[Unit]\n")
 	fmt.Fprintf(&b, "Description=VibeFly app %s\n", spec.Name)
-	fmt.Fprintf(&b, "After=network.target\n")
-	fmt.Fprintf(&b, "\n")
+	fmt.Fprintf(&b, "After=network.target\n\n")
 
 	fmt.Fprintf(&b, "[Service]\n")
 	fmt.Fprintf(&b, "Type=simple\n")
 	fmt.Fprintf(&b, "WorkingDirectory=%s\n", spec.WorkingDir)
 	fmt.Fprintf(&b, "ExecStart=/bin/sh -lc %q\n", spec.StartCmd)
 	fmt.Fprintf(&b, "Restart=on-failure\n")
-	fmt.Fprintf(&b, "RestartSec=5\n")
-	fmt.Fprintf(&b, "\n")
+	fmt.Fprintf(&b, "RestartSec=5\n\n")
 
-	// Cgroups-лимиты.
 	if spec.MemoryMax != "" {
 		fmt.Fprintf(&b, "MemoryMax=%s\n", spec.MemoryMax)
 	}
@@ -326,14 +310,12 @@ func renderUnit(spec AppSpec) string {
 		fmt.Fprintf(&b, "CPUQuota=%s\n", spec.CPUQuota)
 	}
 
-	// Безопасные дефолты.
 	fmt.Fprintf(&b, "PrivateTmp=yes\n")
 	fmt.Fprintf(&b, "NoNewPrivileges=yes\n")
 	fmt.Fprintf(&b, "ProtectSystem=full\n")
 	fmt.Fprintf(&b, "ProtectHome=yes\n")
 	fmt.Fprintf(&b, "ReadWritePaths=%s\n", spec.WorkingDir)
 
-	// Environment.
 	for k, v := range spec.Env {
 		if !isSafeEnvKey(k) {
 			continue
@@ -341,8 +323,7 @@ func renderUnit(spec AppSpec) string {
 		fmt.Fprintf(&b, "Environment=%s=%s\n", k, escapeEnvValue(v))
 	}
 
-	fmt.Fprintf(&b, "\n")
-	fmt.Fprintf(&b, "StandardOutput=journal\n")
+	fmt.Fprintf(&b, "\nStandardOutput=journal\n")
 	fmt.Fprintf(&b, "StandardError=journal\n")
 	fmt.Fprintf(&b, "SyslogIdentifier=vibefly-app-%s\n", spec.ID)
 
@@ -368,8 +349,6 @@ func isSafeEnvKey(k string) bool {
 }
 
 func escapeEnvValue(v string) string {
-	// systemd: спецсимволы экранируются через кавычки.
-	// Простой вариант — обернуть в кавычки и убрать внутренние.
 	cleaned := strings.ReplaceAll(v, `"`, ``)
 	return `"` + cleaned + `"`
 }
