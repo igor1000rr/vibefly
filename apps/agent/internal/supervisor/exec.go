@@ -18,8 +18,12 @@ import (
 //
 // Platform-specific syscalls (Setpgid, kill -group) живут в exec_linux.go /
 // exec_other.go — в файлах с build tag'ами. Это позволяет собирать агент
-на Windows для разработки (функции вырождаются в no-op, реальная работа
-нa Linux/Android).
+// на Windows для разработки (функции вырождаются в no-op, реальная работа
+// на Linux/Android).
+//
+// Используем exec.Command (без CommandContext) и не храним CancelFunc:
+// go vet lostcancel checker ругается на сохранение cancel в struct.
+// Жёсткий kill делаем через killProcessGroup() + cmd.Process.Kill() fallback.
 type ExecSupervisor struct {
 	logger  *slog.Logger
 	appsDir string
@@ -31,7 +35,6 @@ type ExecSupervisor struct {
 
 type runningProc struct {
 	cmd        *exec.Cmd
-	cancel     context.CancelFunc
 	startedAt  time.Time
 	exitCode   int
 	exitedAt   time.Time
@@ -116,31 +119,26 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 		return errors.New("empty start_cmd")
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(runCtx, s.shell, "-c", spec.StartCmd)
+	cmd := exec.Command(s.shell, "-c", spec.StartCmd)
 	cmd.Dir = workdir
 	cmd.Env = mergeEnv(spec.Env)
 	setProcAttrIsolated(cmd) // Linux: Setpgid=true; non-Linux: no-op
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		cancel()
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		cancel()
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		cancel()
 		return fmt.Errorf("start: %w", err)
 	}
 
 	rp := &runningProc{
 		cmd:        cmd,
-		cancel:     cancel,
 		startedAt:  time.Now().UTC(),
 		lastStatus: StatusRunning,
 	}
@@ -194,9 +192,9 @@ func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
 	go func() {
 		for {
 			s.mu.Lock()
-			done1 := rp.lastStatus != StatusRunning
+			doneFlag := rp.lastStatus != StatusRunning
 			s.mu.Unlock()
-			if done1 {
+			if doneFlag {
 				close(done)
 				return
 			}
@@ -207,8 +205,10 @@ func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		_ = killProcessGroup(pid)
-		if rp.cancel != nil {
-			rp.cancel()
+		// Fallback: на non-Linux killProcessGroup это no-op,
+		// kill основного процесса всё равно сработает.
+		if rp.cmd.Process != nil {
+			_ = rp.cmd.Process.Kill()
 		}
 	}
 	return nil
