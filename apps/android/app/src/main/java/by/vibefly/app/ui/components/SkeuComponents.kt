@@ -14,12 +14,15 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +58,12 @@ import by.vibefly.app.ui.theme.SkeuGradients
 
 private val NavBarHeight = 44.dp
 
+/**
+ * Скевоморфный iOS-стиль navbar. Под notch'ем/часами в верхней части экрана:
+ * рисует glossy-полосу высотой [NavBarHeight] + отступ под статус-бар сверху.
+ * Без этого отступа на устройствах с notch (Pixel/Redmi с дыркой под камеру)
+ * системные часы рисуются поверх заголовка.
+ */
 @Composable
 fun IosNavBar(
     title: String,
@@ -62,44 +71,53 @@ fun IosNavBar(
     leading: @Composable () -> Unit = {},
     trailing: @Composable () -> Unit = {},
 ) {
-    Box(
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(NavBarHeight)
-            .background(SkeuGradients.navBar())
-            .drawBehind {
-                drawLine(
-                    color = SkeuColors.NavBarStroke,
-                    start = Offset(0f, size.height - 0.5f),
-                    end = Offset(size.width, size.height - 0.5f),
-                    strokeWidth = 1f,
-                )
-            },
+            .background(SkeuGradients.navBar()),
     ) {
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.align(Alignment.Center),
-            style = TextStyle(
-                shadow = Shadow(
-                    color = Color.Black.copy(alpha = 0.35f),
-                    offset = Offset(0f, -1f),
-                    blurRadius = 0f,
-                ),
-            ),
-        )
-        Row(
+        // Подложка под статус-бар того же цвета что navbar.
+        Spacer(modifier = Modifier.padding(top = statusBarPadding.calculateTopPadding()))
+
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-                .align(Alignment.Center),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .height(NavBarHeight)
+                .drawBehind {
+                    drawLine(
+                        color = SkeuColors.NavBarStroke,
+                        start = Offset(0f, size.height - 0.5f),
+                        end = Offset(size.width, size.height - 0.5f),
+                        strokeWidth = 1f,
+                    )
+                },
         ) {
-            Box(contentAlignment = Alignment.CenterStart) { leading() }
-            Box(contentAlignment = Alignment.CenterEnd) { trailing() }
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.Center),
+                style = TextStyle(
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.35f),
+                        offset = Offset(0f, -1f),
+                        blurRadius = 0f,
+                    ),
+                ),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+                    .align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Box(contentAlignment = Alignment.CenterStart) { leading() }
+                Box(contentAlignment = Alignment.CenterEnd) { trailing() }
+            }
         }
     }
 }
