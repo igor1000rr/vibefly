@@ -10,6 +10,7 @@ import by.vibefly.app.data.ServiceLocator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -43,9 +44,14 @@ class AppDetailViewModel(
                 val client = ServiceLocator.agent()
                 val app = client.getApp(appId)
                 val backlog = client.recentLogs(appId, lines = 100)
-                _state.update { it.copy(app = app, logs = backlog, loading = false) }
+                _state.update { it.copy(app = app, logs = backlog, loading = false, error = null) }
             } catch (t: Throwable) {
-                _state.update { it.copy(loading = false, error = t.localizedMessage) }
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        error = t.localizedMessage ?: "Не удалось загрузить приложение",
+                    )
+                }
             }
         }
     }
@@ -66,18 +72,25 @@ class AppDetailViewModel(
 
     private fun observeLogs() {
         viewModelScope.launch {
-            try {
-                _state.update { it.copy(streaming = true) }
-                ServiceLocator.agent().streamLogs(appId).collect { entry ->
+            _state.update { it.copy(streaming = true) }
+            // catch на Flow — любая ошибка в streamLogs (WebSocket оборвался, агент
+            // недоступен) выставляет error и завершает поток, но не крашит корутину.
+            ServiceLocator.agent().streamLogs(appId)
+                .catch { t ->
+                    _state.update {
+                        it.copy(
+                            streaming = false,
+                            error = t.localizedMessage ?: "Потеряли связь с логами",
+                        )
+                    }
+                }
+                .collect { entry ->
                     _state.update { snap ->
                         // Держим последние 300 строк, чтобы LazyColumn не разбухал.
                         val list = (snap.logs + entry).takeLast(300)
-                        snap.copy(logs = list)
+                        snap.copy(logs = list, error = null)
                     }
                 }
-            } catch (t: Throwable) {
-                _state.update { it.copy(streaming = false, error = t.localizedMessage) }
-            }
         }
     }
 

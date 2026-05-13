@@ -9,16 +9,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
  * Service locator + реактивное пересоздание AgentApi при изменении настроек.
  *
- * Клиент пересоздаётся лениво — при первом вызове репозитория после смены URL/токена.
- * Это проще и безопаснее, чем дёргать HttpClient в рантайме.
- *
- * Если SettingsStore.demoMode = true — возвращается MockAgentClient,
- * который никуда не ходит и отдаёт фейковые данные для демо/скриншотов.
+ * Первый клиент создаётся СИНХРОННО в init() — это убирает гонку между
+ * Application.onCreate и первым вызовом agent() из ViewModel при запуске.
+ * Дальше в фоне следим за settingsStore и пересоздаём клиента при смене
+ * URL/токена/demo-mode.
  */
 object ServiceLocator {
 
@@ -29,11 +29,6 @@ object ServiceLocator {
     private val _agentClient = MutableStateFlow<AgentApi?>(null)
     val agentClient: StateFlow<AgentApi?> = _agentClient.asStateFlow()
 
-    /**
-     * ToolRegistry создаётся один раз и хранит замыкание на `agent()` — поэтому
-     * после смены настроек его пересоздавать не надо: при следующем execute()
-     * он возьмёт уже обновлённого клиента.
-     */
     private val toolRegistry: ToolRegistry by lazy { ToolRegistry { agent() } }
 
     fun init(app: Application) {
@@ -41,21 +36,31 @@ object ServiceLocator {
         appContext = app
         settingsStore = SettingsStore(app)
 
-        // Наблюдаем за настройками; при любом изменении — пересобираем клиента.
+        // СИНХРОННО создаём первого клиента по текущему состоянию настроек.
+        // Без этого первый вызов agent() из ViewModel.init может случиться РАНЬШЕ,
+        // чем корутина ниже успеет сделать первый emit — и приложение упадёт с
+        // "AgentApi ещё не создан".
+        _agentClient.value = buildClient(settingsStore.current())
+
+        // Дальше наблюдаем за изменениями. drop(1) пропускает стартовое значение,
+        // чтобы не пересоздавать же только что созданного клиента.
         scope.launch {
-            settingsStore.state.collect { snap ->
+            settingsStore.state.drop(1).collect { snap ->
                 _agentClient.value?.close()
-                _agentClient.value = if (snap.demoMode) {
-                    MockAgentClient()
-                } else {
-                    AgentClient(
-                        baseUrl = snap.baseUrl,
-                        tokenProvider = { snap.authToken.ifBlank { null } },
-                    )
-                }
+                _agentClient.value = buildClient(snap)
             }
         }
     }
+
+    private fun buildClient(snap: SettingsStore.Snapshot): AgentApi =
+        if (snap.demoMode) {
+            MockAgentClient()
+        } else {
+            AgentClient(
+                baseUrl = snap.baseUrl,
+                tokenProvider = { snap.authToken.ifBlank { null } },
+            )
+        }
 
     fun settings(): SettingsStore = settingsStore
 
@@ -65,7 +70,7 @@ object ServiceLocator {
      */
     fun agent(): AgentApi = checkNotNull(_agentClient.value) { "AgentApi ещё не создан" }
 
-    fun apps(): AppsRepository = AppsRepository(agent())
-    fun system(): SystemRepository = SystemRepository(agent())
+    fun apps(): AppsRepository = AppsRepository { agent() }
+    fun system(): SystemRepository = SystemRepository { agent() }
     fun tools(): ToolRegistry = toolRegistry
 }
