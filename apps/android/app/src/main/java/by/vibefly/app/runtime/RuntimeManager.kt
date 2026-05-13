@@ -28,14 +28,22 @@ import java.net.URL
  *   4. ProcessBuilder запускает агента; stdout/stderr читаем в Logcat
  *   5. Опрашиваем /health пока он не ответит; обновляем state
  *
+ * Auto-restart: если процесс умирает (OOM, краш, kill -9), waitFor возвращается,
+ * мы ждём AUTO_RESTART_DELAY_MS и автоматически запускаем агент заново.
+ * Останавливаем auto-restart loop только при явном stop() от пользователя.
+ *
  * При выходе из приложения процесс остаётся живым пока есть foreground service.
- * Если процесс умирает — мы это видим (waitFor вернулся) и обновляем state.
  */
 object RuntimeManager {
 
     private const val TAG = "VibeFlyRuntime"
     private const val AGENT_PORT = 3001
     private const val HEALTH_URL = "http://127.0.0.1:$AGENT_PORT/health"
+
+    // Сколько ждать перед auto-restart после неожиданной смерти процесса.
+    // Достаточно для того чтобы порт освободился, но не так долго чтобы
+    // нарушить ощущение "сервер всегда онлайн".
+    private const val AUTO_RESTART_DELAY_MS = 3_000L
 
     enum class State { Idle, Starting, Running, Stopped, Failed }
 
@@ -44,6 +52,7 @@ object RuntimeManager {
         val version: String?,
         val pid: Int?,
         val error: String?,
+        val restartCount: Int = 0,
     )
 
     private val _status = MutableStateFlow(Status(State.Idle, null, null, null))
@@ -51,6 +60,10 @@ object RuntimeManager {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var process: Process? = null
+
+    // Флаг "stop был явный". Если true — auto-restart не сработает.
+    @Volatile
+    private var explicitlyStopped = false
 
     /**
      * Запустить агента если ещё не запущен. Идемпотентно — повторные вызовы
@@ -61,11 +74,13 @@ object RuntimeManager {
             Log.i(TAG, "уже запущен или стартует, пропускаю")
             return
         }
+        explicitlyStopped = false
         scope.launch { start(context.applicationContext) }
     }
 
     private suspend fun start(context: Context) {
-        _status.value = Status(State.Starting, null, null, null)
+        val currentRestartCount = _status.value.restartCount
+        _status.value = Status(State.Starting, null, null, null, currentRestartCount)
         try {
             val agentDir = File(context.filesDir, "agent").apply { mkdirs() }
             val agentBinary = File(agentDir, "vibefly-agent")
@@ -83,6 +98,7 @@ object RuntimeManager {
                     version = null,
                     pid = null,
                     error = "agent binary не найден в assets — APK собран без CI или вручную без бинаря",
+                    restartCount = currentRestartCount,
                 )
                 Log.w(TAG, "agent binary отсутствует, embedded runtime не запускается")
                 return
@@ -98,7 +114,6 @@ object RuntimeManager {
                 .redirectErrorStream(true)
                 .directory(agentDir)
             // Android: дочерний процесс наследует UID приложения (Linux UID-based sandbox).
-            // Никаких лишних прав он не получит.
 
             val proc = pb.start()
             process = proc
@@ -108,6 +123,7 @@ object RuntimeManager {
                 version = null,
                 pid = proc.pid().toInt(),
                 error = null,
+                restartCount = currentRestartCount,
             )
 
             // Читаем stdout в Logcat, чтобы можно было дебажить через adb logcat -s VibeFlyRuntime.
@@ -116,17 +132,31 @@ object RuntimeManager {
                     lines.forEach { Log.i(TAG, "[agent] $it") }
                 }
             }
-            // Следим за смертью процесса.
+            // Следим за смертью процесса + auto-restart.
             scope.launch {
                 val exitCode = withContext(Dispatchers.IO) { proc.waitFor() }
                 Log.w(TAG, "agent exited with code=$exitCode")
+                process = null
+
+                if (explicitlyStopped) {
+                    _status.value = Status(State.Stopped, null, null, null, currentRestartCount)
+                    Log.i(TAG, "agent stopped by user, не перезапускаем")
+                    return@launch
+                }
+
+                // Неожиданная смерть — auto-restart.
                 _status.value = Status(
                     state = State.Stopped,
                     version = null,
                     pid = null,
-                    error = "agent exited with $exitCode",
+                    error = "agent exited with $exitCode, перезапуск через ${AUTO_RESTART_DELAY_MS / 1000}s",
+                    restartCount = currentRestartCount,
                 )
-                process = null
+                delay(AUTO_RESTART_DELAY_MS)
+                if (explicitlyStopped) return@launch  // пока ждали — пользователь отменил
+                Log.i(TAG, "auto-restart attempt #${currentRestartCount + 1}")
+                _status.value = _status.value.copy(restartCount = currentRestartCount + 1)
+                start(context)
             }
 
             // Ждём пока /health ответит, до 10 секунд.
@@ -137,6 +167,7 @@ object RuntimeManager {
                     version = "embedded",
                     pid = proc.pid().toInt(),
                     error = null,
+                    restartCount = currentRestartCount,
                 )
                 Log.i(TAG, "agent отвечает на /health, готов к работе")
             } else {
@@ -145,23 +176,27 @@ object RuntimeManager {
                     version = null,
                     pid = proc.pid().toInt(),
                     error = "agent не ответил на /health за 10s",
+                    restartCount = currentRestartCount,
                 )
                 Log.e(TAG, "agent не ответил на /health")
             }
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
-            _status.value = Status(State.Failed, null, null, t.message ?: t.toString())
+            _status.value = Status(
+                State.Failed, null, null, t.message ?: t.toString(),
+                _status.value.restartCount,
+            )
         }
     }
 
     /**
-     * Остановить агента. Используется при явном пользовательском действии.
-     * Foreground-service-keepalive сам по себе вызывает start, не stop.
+     * Остановить агента явно. Отключает auto-restart до следующего startIfNeeded().
      */
     fun stop() {
+        explicitlyStopped = true
         process?.destroy()
         process = null
-        _status.value = Status(State.Stopped, null, null, null)
+        _status.value = Status(State.Stopped, null, null, null, _status.value.restartCount)
     }
 
     private fun extractFromAssets(context: Context, assetPath: String, target: File) {
