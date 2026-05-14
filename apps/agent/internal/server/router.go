@@ -21,6 +21,7 @@ import (
 	"by.vibefly/agent/internal/apps"
 	"by.vibefly/agent/internal/binstore"
 	"by.vibefly/agent/internal/logs"
+	"by.vibefly/agent/internal/manifest"
 	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
 	"by.vibefly/agent/internal/supervisor"
@@ -64,6 +65,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/system", systemHandler(deps))
 		r.Get("/apps", listAppsHandler(deps))
 		r.Post("/apps", installAppHandler(deps))
+		r.Post("/apps/from-repo", installFromRepoHandler(deps))
 		r.Get("/apps/{id}", getAppHandler(deps))
 		r.Delete("/apps/{id}", uninstallAppHandler(deps))
 		r.Post("/apps/{id}/start", startAppHandler(deps))
@@ -72,7 +74,6 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/apps/{id}/logs", logsRecentHandler(deps))
 		r.Get("/apps/{id}/logs/stream", logsStreamHandler(deps))
 
-		// Per-app public tunnel — отдельный cloudflared на port приложения.
 		r.Get("/apps/{id}/tunnel", appTunnelStatusHandler(deps))
 		r.Post("/apps/{id}/publish", appTunnelPublishHandler(deps))
 		r.Delete("/apps/{id}/publish", appTunnelUnpublishHandler(deps))
@@ -84,6 +85,9 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/tunnel", tunnelStatusHandler(deps))
 		r.Post("/tunnel/start", tunnelStartHandler(deps))
 		r.Post("/tunnel/stop", tunnelStopHandler(deps))
+
+		// Превью манифеста (без инсталла) — для UI чтобы показать юзеру поля перед Deploy.
+		r.Get("/manifest/preview", manifestPreviewHandler(deps))
 	})
 
 	return r
@@ -125,8 +129,6 @@ func getAppHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// withTunnelURL/withTunnelURLs — прокидывают PublicURL из AppTunnels в ответ.
-// App хранит PublicURL поле которое выставляется из рун-времени менеджера.
 func withTunnelURL(deps Dependencies, app *apps.App) *apps.App {
 	if deps.AppTunnels != nil && app != nil {
 		app.PublicURL = deps.AppTunnels.PublicURL(app.ID)
@@ -144,7 +146,6 @@ func withTunnelURLs(deps Dependencies, list []*apps.App) []*apps.App {
 	return list
 }
 
-// appTunnelStatusHandler — GET /apps/{id}/tunnel
 func appTunnelStatusHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -156,7 +157,6 @@ func appTunnelStatusHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// appTunnelPublishHandler — POST /apps/{id}/publish
 func appTunnelPublishHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -200,6 +200,9 @@ func appTunnelUnpublishHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+// installRequest — ручной деплой с binary_url или archive_url.
+// Раньше binary_url понимался строго как бинарь. Теперь если URL заканчивается
+// на .tar.gz/.tgz/.zip — распаковываем в workdir.
 type installRequest struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
@@ -246,15 +249,9 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 		if workdir == "" {
 			return fmt.Errorf("binary_url указан, но working_dir/apps_dir не определён")
 		}
-		deps.Logger.Info("скачиваю бинарь", "id", req.ID, "url", req.BinaryURL)
-		dl := binstore.New()
-		dlCtx, cancel := context.WithTimeout(ctx, binstore.DefaultTimeout)
-		defer cancel()
-		path, err := dl.DownloadBinary(dlCtx, req.BinaryURL, workdir)
-		if err != nil {
-			return fmt.Errorf("download binary: %w", err)
+		if err := downloadOrExtract(ctx, deps.Logger, req.ID, req.BinaryURL, workdir); err != nil {
+			return err
 		}
-		deps.Logger.Info("бинарь скачан", "id", req.ID, "path", path)
 	}
 
 	spec := supervisor.AppSpec{
@@ -280,10 +277,140 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 	return deps.Apps.Install(spec, meta)
 }
 
+// downloadOrExtract — если URL это .tar.gz/.zip — распаковываем. Иначе скачиваем в workdir/binary.
+func downloadOrExtract(ctx context.Context, logger *slog.Logger, appID, fileURL, workdir string) error {
+	dl := binstore.New()
+	dlCtx, cancel := context.WithTimeout(ctx, binstore.DefaultTimeout)
+	defer cancel()
+
+	if kind := binstore.DetectArchive(fileURL); kind != "" {
+		logger.Info("скачиваю архив", "id", appID, "url", fileURL, "kind", kind)
+		exec, err := dl.DownloadAndExtract(dlCtx, fileURL, workdir)
+		if err != nil {
+			return fmt.Errorf("download+extract: %w", err)
+		}
+		logger.Info("архив распакован", "id", appID, "executable", exec, "workdir", workdir)
+		return nil
+	}
+	logger.Info("скачиваю бинарь", "id", appID, "url", fileURL)
+	path, err := dl.DownloadBinary(dlCtx, fileURL, workdir)
+	if err != nil {
+		return fmt.Errorf("download binary: %w", err)
+	}
+	logger.Info("бинарь скачан", "id", appID, "path", path)
+	return nil
+}
+
+// installFromRepoRequest — деплой по ссылке на репо. Агент сам тянет vibefly.toml.
+type installFromRepoRequest struct {
+	RepoURL string `json:"repo_url"` // https://github.com/owner/repo
+	Branch  string `json:"branch"`   // "" → main потом master
+	ID      string `json:"id"`       // override (default = repo name)
+}
+
+func installFromRepoHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req installFromRepoRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if req.RepoURL == "" {
+			writeError(w, http.StatusBadRequest, "repo_url обязателен")
+			return
+		}
+		owner, repo, err := manifest.ParseGitHubURL(req.RepoURL)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m, branch, err := manifest.FetchFromRepoURL(r.Context(), req.RepoURL, req.Branch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "не удалось взять vibefly.toml: "+err.Error())
+			return
+		}
+
+		appID := req.ID
+		if appID == "" {
+			appID = sanitizeID(repo)
+		}
+
+		internalReq := installRequest{
+			ID:            appID,
+			Name:          firstNonEmpty(m.Name, repo),
+			StartCmd:      m.StartCmd,
+			Env:           m.Env,
+			MemoryMax:     m.MemoryMax,
+			CPUQuota:      m.CPUQuota,
+			Repo:          owner + "/" + repo,
+			Branch:        branch,
+			Port:          m.Port,
+			BinaryURL:     m.BinaryURL,
+			Autostart:     m.Autostart,
+			RestartPolicy: m.RestartPolicy,
+		}
+		if internalReq.StartCmd == "" {
+			internalReq.StartCmd = "./binary"
+		}
+		if err := installFromRequest(r.Context(), deps, internalReq); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"status":    "installed",
+			"id":        appID,
+			"repo":      owner + "/" + repo,
+			"branch":    branch,
+			"manifest":  m,
+		})
+	}
+}
+
+// manifestPreviewHandler — GET /manifest/preview?repo_url=...&branch=...
+// Для UI: выводит поля манифеста без инсталла, чтобы юзер подтвердил перед Deploy.
+func manifestPreviewHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoURL := r.URL.Query().Get("repo_url")
+		branch := r.URL.Query().Get("branch")
+		if repoURL == "" {
+			writeError(w, http.StatusBadRequest, "repo_url обязателен")
+			return
+		}
+		m, foundBranch, err := manifest.FetchFromRepoURL(r.Context(), repoURL, branch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"manifest": m,
+			"branch":   foundBranch,
+		})
+	}
+}
+
+// sanitizeID — из имени репо делает валидный app ID.
+func sanitizeID(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		case r == ' ', r == '.':
+			b.WriteRune('-')
+		}
+	}
+	result := b.String()
+	if result == "" {
+		result = "app"
+	}
+	return result
+}
+
 func uninstallAppHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		// При uninstall автоматически останавливаем туннель.
 		if deps.AppTunnels != nil {
 			_ = deps.AppTunnels.Unpublish(id)
 		}
