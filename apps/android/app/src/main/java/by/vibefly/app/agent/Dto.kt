@@ -41,9 +41,11 @@ data class AppDto(
 /**
  * Запрос на создание приложения через POST /apps.
  *
- * autostart=true (по умолчанию) — восстанавливать приложение после перезапуска
- * агента (например после ребута телефона). Сними чекбокс в UI если нужен одноразовый
- * запуск (например для миграции базы).
+ * autostart=true (по умолчанию) — восстанавливать приложение после перезапуска.
+ * restartPolicy:
+ *   "" / "no"   — никогда не рестартить после exit'а (default)
+ *   "on-failure" — рестарт только если exit code ≠ 0 (рекомендуется для серверов)
+ *   "always"    — рестарт после любого exit'а
  */
 @Serializable
 data class InstallAppRequest(
@@ -54,6 +56,7 @@ data class InstallAppRequest(
     val domain: String? = null,
     @SerialName("binary_url") val binaryUrl: String? = null,
     val autostart: Boolean = true,
+    @SerialName("restart_policy") val restartPolicy: String = "on-failure",
 )
 
 @Serializable

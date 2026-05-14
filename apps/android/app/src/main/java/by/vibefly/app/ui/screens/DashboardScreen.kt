@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -339,16 +341,6 @@ private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (
     }
 }
 
-/**
- * Диалог развёртывания. Поля:
- *   • ID (slug) — обязательно
- *   • Имя — опционально
- *   • URL бинаря — опционально, https://; agent скачает в workdir/binary
- *   • Команда запуска — обязательно. Если URL задан, хинт покажет "./binary".
- *   • Порт — опционально
- *   • Автозапуск — default true. Если включен, приложение само стартует
- *     после перезагрузки телефона / рестарта agent'а.
- */
 @Composable
 private fun DeployDialog(
     deploying: Boolean,
@@ -362,6 +354,7 @@ private fun DeployDialog(
     var startCmd by remember { mutableStateOf("") }
     var portText by remember { mutableStateOf("") }
     var autostart by remember { mutableStateOf(true) }
+    var restartPolicy by remember { mutableStateOf("on-failure") }
 
     val canConfirm = id.isNotBlank() && startCmd.isNotBlank() && !deploying
     val urlLooksValid = binaryUrl.isBlank() || binaryUrl.startsWith("https://")
@@ -379,6 +372,7 @@ private fun DeployDialog(
                             port = portText.trim().toIntOrNull(),
                             binaryUrl = binaryUrl.trim().takeIf { it.isNotBlank() },
                             autostart = autostart,
+                            restartPolicy = restartPolicy,
                         )
                     )
                 },
@@ -390,7 +384,11 @@ private fun DeployDialog(
         },
         title = { Text("Развернуть приложение") },
         text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = id,
                     onValueChange = { id = it.filter { c -> c.isLetterOrDigit() || c == '-' || c == '_' } },
@@ -469,6 +467,34 @@ private fun DeployDialog(
                         )
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Политика восстановления при падении",
+                    color = SkeuColors.PrimaryText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                RestartPolicyOption(
+                    label = "Никогда",
+                    hint = "Для одноразовых скриптов (миграции, batch jobs)",
+                    value = "no",
+                    selected = restartPolicy,
+                    onSelect = { restartPolicy = it },
+                )
+                RestartPolicyOption(
+                    label = "При сбоях (on-failure)",
+                    hint = "Рекомендуется для большинства серверов",
+                    value = "on-failure",
+                    selected = restartPolicy,
+                    onSelect = { restartPolicy = it },
+                )
+                RestartPolicyOption(
+                    label = "Всегда",
+                    hint = "Даже после graceful exit",
+                    value = "always",
+                    selected = restartPolicy,
+                    onSelect = { restartPolicy = it },
+                )
                 if (error != null) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
@@ -485,16 +511,45 @@ private fun DeployDialog(
                         fontSize = 10.sp,
                     )
                 }
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = if (binaryUrl.isNotBlank())
-                        "Агент скачает бинарь в workdir/binary и chmod +x. Максимум 200 MB, timeout 90s."
-                    else
-                        "Без URL — положить бинарь в apps_dir/<id>/ вручную (adb или туннель).",
-                    color = SkeuColors.SecondaryText,
-                    fontSize = 10.sp,
-                )
             }
         },
     )
+}
+
+@Composable
+private fun RestartPolicyOption(
+    label: String,
+    hint: String,
+    value: String,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = value == selected,
+                onClick = { onSelect(value) },
+            )
+            .padding(vertical = 2.dp),
+    ) {
+        RadioButton(
+            selected = value == selected,
+            onClick = { onSelect(value) },
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Column {
+            Text(
+                text = label,
+                color = SkeuColors.PrimaryText,
+                fontSize = 12.sp,
+            )
+            Text(
+                text = hint,
+                color = SkeuColors.SecondaryText,
+                fontSize = 10.sp,
+            )
+        }
+    }
 }

@@ -121,21 +121,20 @@ func getAppHandler(deps Dependencies) http.HandlerFunc {
 
 // installRequest — тело POST /apps.
 type installRequest struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	WorkingDir string            `json:"working_dir"`
-	StartCmd   string            `json:"start_cmd"`
-	Env        map[string]string `json:"env"`
-	MemoryMax  string            `json:"memory_max"`
-	CPUQuota   string            `json:"cpu_quota"`
-	Repo       string            `json:"repo"`
-	Branch     string            `json:"branch"`
-	Port       int               `json:"port"`
-	Domain     string            `json:"domain"`
-	BinaryURL  string            `json:"binary_url"`
-	// Autostart — запускать ли автоматически при старте агента.
-	// Попадает в spec.json, Store.AutostartAll() читает при init.
-	Autostart bool `json:"autostart"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	WorkingDir    string            `json:"working_dir"`
+	StartCmd      string            `json:"start_cmd"`
+	Env           map[string]string `json:"env"`
+	MemoryMax     string            `json:"memory_max"`
+	CPUQuota      string            `json:"cpu_quota"`
+	Repo          string            `json:"repo"`
+	Branch        string            `json:"branch"`
+	Port          int               `json:"port"`
+	Domain        string            `json:"domain"`
+	BinaryURL     string            `json:"binary_url"`
+	Autostart     bool              `json:"autostart"`
+	RestartPolicy string            `json:"restart_policy"`
 }
 
 func installAppHandler(deps Dependencies) http.HandlerFunc {
@@ -179,14 +178,15 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 	}
 
 	spec := supervisor.AppSpec{
-		ID:         req.ID,
-		Name:       firstNonEmpty(req.Name, req.ID),
-		WorkingDir: workdir,
-		StartCmd:   req.StartCmd,
-		Env:        req.Env,
-		MemoryMax:  req.MemoryMax,
-		CPUQuota:   req.CPUQuota,
-		Autostart:  req.Autostart,
+		ID:            req.ID,
+		Name:          firstNonEmpty(req.Name, req.ID),
+		WorkingDir:    workdir,
+		StartCmd:      req.StartCmd,
+		Env:           req.Env,
+		MemoryMax:     req.MemoryMax,
+		CPUQuota:      req.CPUQuota,
+		Autostart:     req.Autostart,
+		RestartPolicy: req.RestartPolicy,
 	}
 	meta := apps.App{
 		ID:     req.ID,
