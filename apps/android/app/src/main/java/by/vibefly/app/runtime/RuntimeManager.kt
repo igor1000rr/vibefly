@@ -205,6 +205,8 @@ object RuntimeManager {
     /**
      * Генерирует токен если в SettingsStore пусто. Сохраняет обратно в store —
      * ServiceLocator подхватит и пересоздаст AgentClient с Bearer-заголовком.
+     *
+     * Byte → hex через String.format с маской 0xFF (иначе negative byte даёт "ffffffa3").
      */
     private fun ensureAuthToken(): String {
         val settings = ServiceLocator.settings()
@@ -213,7 +215,11 @@ object RuntimeManager {
 
         val bytes = ByteArray(32)
         SecureRandom().nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
+        val sb = StringBuilder(64)
+        for (b in bytes) {
+            sb.append(String.format("%02x", b.toInt() and 0xff))
+        }
+        val token = sb.toString()
         settings.setAuthToken(token)
         Log.i(TAG, "сгенерирован новый auth_token (32 байта)")
         return token
