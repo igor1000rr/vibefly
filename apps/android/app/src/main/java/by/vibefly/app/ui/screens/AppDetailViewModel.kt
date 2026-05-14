@@ -1,6 +1,5 @@
 package by.vibefly.app.ui.screens
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -21,6 +20,8 @@ data class AppDetailState(
     val streaming: Boolean = false,
     val error: String? = null,
     val uninstalling: Boolean = false,
+    val publishing: Boolean = false,
+    val publishError: String? = null,
 )
 
 class AppDetailViewModel(
@@ -68,10 +69,6 @@ class AppDetailViewModel(
         }
     }
 
-    /**
-     * Удаляет приложение и вызывает onDone при успехе (для навигации назад).
-     * При ошибке — пишет в state.error.
-     */
     fun uninstall(onDone: () -> Unit) {
         viewModelScope.launch {
             _state.update { it.copy(uninstalling = true, error = null) }
@@ -88,6 +85,49 @@ class AppDetailViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Стартует cloudflared для этого приложения. Операция занимает 5-30s.
+     */
+    fun publish() {
+        viewModelScope.launch {
+            _state.update { it.copy(publishing = true, publishError = null) }
+            try {
+                ServiceLocator.agent().publishApp(appId)
+                load() // перезагрузит app.publicUrl
+                _state.update { it.copy(publishing = false) }
+            } catch (t: Throwable) {
+                _state.update {
+                    it.copy(
+                        publishing = false,
+                        publishError = t.localizedMessage ?: "Не удалось опубликовать",
+                    )
+                }
+            }
+        }
+    }
+
+    fun unpublish() {
+        viewModelScope.launch {
+            _state.update { it.copy(publishing = true, publishError = null) }
+            try {
+                ServiceLocator.agent().unpublishApp(appId)
+                load()
+                _state.update { it.copy(publishing = false) }
+            } catch (t: Throwable) {
+                _state.update {
+                    it.copy(
+                        publishing = false,
+                        publishError = t.localizedMessage ?: "Не удалось снять публикацию",
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearPublishError() {
+        _state.update { it.copy(publishError = null) }
     }
 
     private fun observeLogs() {

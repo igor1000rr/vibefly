@@ -76,8 +76,6 @@ class AgentClient(
         http.post("$baseUrl/apps/$id/stop").body()
     override suspend fun startApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/start").body()
-
-    // Багфикс: роутер ожидает DELETE, раньше был POST (405 Method Not Allowed на реальном агенте).
     override suspend fun uninstallApp(id: String): CommandResultDto =
         http.delete("$baseUrl/apps/$id").body()
 
@@ -103,10 +101,8 @@ class AgentClient(
 
     override suspend fun marketplaceList(): List<MarketplaceTemplateDto> =
         http.get("$baseUrl/marketplace").body()
-
     override suspend fun marketplaceGet(id: String): MarketplaceTemplateDto =
         http.get("$baseUrl/marketplace/$id").body()
-
     override suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
         http.post("$baseUrl/marketplace/$templateId/install") {
             contentType(ContentType.Application.Json)
@@ -116,12 +112,17 @@ class AgentClient(
 
     override suspend fun tunnelStatus(): TunnelStatusDto =
         http.get("$baseUrl/tunnel").body()
-
     override suspend fun tunnelStart(): TunnelStatusDto =
         http.post("$baseUrl/tunnel/start").body()
-
     override suspend fun tunnelStop(): TunnelStatusDto =
         http.post("$baseUrl/tunnel/stop").body()
+
+    override suspend fun appTunnelStatus(id: String): TunnelStatusDto =
+        http.get("$baseUrl/apps/$id/tunnel").body()
+    override suspend fun publishApp(id: String): TunnelStatusDto =
+        http.post("$baseUrl/apps/$id/publish").body()
+    override suspend fun unpublishApp(id: String): CommandResultDto =
+        http.delete("$baseUrl/apps/$id/publish").body()
 
     override fun close() {
         http.close()
@@ -130,7 +131,7 @@ class AgentClient(
     private fun <T> ProducerScope<T>.sendOrSkip(value: T) {
         val result = trySend(value)
         if (!result.isSuccess) {
-            // slow consumer или канал закрыт
+            // slow consumer
         }
     }
 

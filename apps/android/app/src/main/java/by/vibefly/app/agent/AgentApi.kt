@@ -4,10 +4,6 @@ import kotlinx.coroutines.flow.Flow
 
 /**
  * Публичный API агента с точки зрения Android-клиента.
- *
- * Две реализации:
- *  • AgentClient     — ходит в Go-агент по HTTP/WebSocket
- *  • MockAgentClient — возвращает хардкоженные demo-данные
  */
 interface AgentApi {
     val baseUrl: String
@@ -30,11 +26,15 @@ interface AgentApi {
     suspend fun marketplaceGet(id: String): MarketplaceTemplateDto
     suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest)
 
-    /** Публичный туннель (Cloudflare). */
+    /** Cloudflare Tunnel на сам агент (127.0.0.1:3001). */
     suspend fun tunnelStatus(): TunnelStatusDto
     suspend fun tunnelStart(): TunnelStatusDto
     suspend fun tunnelStop(): TunnelStatusDto
 
-    /** Закрыть все сетевые ресурсы. */
+    /** Per-app tunnel на port приложения. Для Publish/Unpublish из AppDetail. */
+    suspend fun appTunnelStatus(id: String): TunnelStatusDto
+    suspend fun publishApp(id: String): TunnelStatusDto
+    suspend fun unpublishApp(id: String): CommandResultDto
+
     fun close()
 }

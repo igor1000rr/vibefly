@@ -24,6 +24,10 @@ data class SystemMetricsDto(
     @SerialName("uptime_seconds") val uptimeSeconds: Int,
 )
 
+/**
+ * AppDto + опциональный publicUrl (выставляется агентом при активной публикации
+ * через per-app tunnel). Не персистится, меняется при каждом Publish.
+ */
 @Serializable
 data class AppDto(
     val id: String,
@@ -33,20 +37,12 @@ data class AppDto(
     val branch: String? = null,
     val port: Int? = null,
     val domain: String? = null,
+    @SerialName("public_url") val publicUrl: String? = null,
     @SerialName("memory_mb") val memoryMb: Int? = null,
     @SerialName("started_at") val startedAt: String? = null,
     @SerialName("last_deploy") val lastDeploy: String? = null,
 )
 
-/**
- * Запрос на создание приложения через POST /apps.
- *
- * autostart=true (по умолчанию) — восстанавливать приложение после перезапуска.
- * restartPolicy:
- *   "" / "no"   — никогда не рестартить после exit'а (default)
- *   "on-failure" — рестарт только если exit code ≠ 0 (рекомендуется для серверов)
- *   "always"    — рестарт после любого exit'а
- */
 @Serializable
 data class InstallAppRequest(
     val id: String,

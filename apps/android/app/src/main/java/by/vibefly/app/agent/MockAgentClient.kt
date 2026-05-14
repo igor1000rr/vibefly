@@ -9,109 +9,50 @@ class MockAgentClient : AgentApi {
     override val baseUrl: String = "mock://"
 
     private val apps = mutableListOf(
-        AppDto(
-            id = "amina-bot",
-            name = "amina-bot",
-            status = "running",
-            repo = "antsincgame/Amina-bot",
-            branch = "main",
-            port = 3001,
-            domain = "@AIAMINABOT",
-            memoryMb = 124,
-            startedAt = "2026-05-08T03:58:00Z",
-            lastDeploy = "2026-05-12T01:30:00Z",
-        ),
-        AppDto(
-            id = "tonforge-api",
-            name = "tonforge-api",
-            status = "running",
-            repo = "antsincgame/tonforge",
-            branch = "main",
-            port = 3002,
-            domain = "api.tonforge.org",
-            memoryMb = 89,
-            startedAt = "2026-05-09T12:00:00Z",
-            lastDeploy = "2026-05-11T22:15:00Z",
-        ),
-        AppDto(
-            id = "azcrm-staging",
-            name = "azcrm-staging",
-            status = "deploying",
-            repo = "igor1000rr/azcrm",
-            branch = "staging",
-            port = 3003,
-            domain = "staging.crm.azgroupcompany.net",
-            memoryMb = null,
-            startedAt = null,
-            lastDeploy = "2026-05-12T03:50:00Z",
-        ),
-        AppDto(
-            id = "analytics-cron",
-            name = "analytics-cron",
-            status = "stopped",
-            repo = "igor1000rr/analytics",
-            branch = "main",
-            port = null,
-            domain = null,
-            memoryMb = null,
-            startedAt = null,
-            lastDeploy = "2026-05-10T08:00:00Z",
-        ),
+        AppDto("amina-bot", "amina-bot", "running", "antsincgame/Amina-bot", "main", 3001, "@AIAMINABOT",
+            publicUrl = null, memoryMb = 124, startedAt = "2026-05-08T03:58:00Z", lastDeploy = "2026-05-12T01:30:00Z"),
+        AppDto("tonforge-api", "tonforge-api", "running", "antsincgame/tonforge", "main", 3002, "api.tonforge.org",
+            publicUrl = null, memoryMb = 89, startedAt = "2026-05-09T12:00:00Z", lastDeploy = "2026-05-11T22:15:00Z"),
+        AppDto("azcrm-staging", "azcrm-staging", "deploying", "igor1000rr/azcrm", "staging", 3003, "staging.crm.azgroupcompany.net",
+            publicUrl = null, memoryMb = null, startedAt = null, lastDeploy = "2026-05-12T03:50:00Z"),
+        AppDto("analytics-cron", "analytics-cron", "stopped", "igor1000rr/analytics", "main", null, null,
+            publicUrl = null, memoryMb = null, startedAt = null, lastDeploy = "2026-05-10T08:00:00Z"),
     )
 
-    @Volatile
-    private var tunnel: TunnelStatusDto = TunnelStatusDto(provider = "trycloudflare")
+    private val appTunnels = mutableMapOf<String, TunnelStatusDto>()
+
+    @Volatile private var tunnel: TunnelStatusDto = TunnelStatusDto(provider = "trycloudflare")
 
     override suspend fun health(): HealthDto {
         simulateLatency()
-        return HealthDto(
-            status = "ok",
-            version = "demo-0.4",
-            time = nowIso(),
-            supervisorAvailable = false,
-            tunnelAvailable = true,
-        )
+        return HealthDto("ok", "demo-0.5", nowIso(), supervisorAvailable = false, tunnelAvailable = true)
     }
 
     override suspend fun systemMetrics(): SystemMetricsDto {
         simulateLatency()
-        return SystemMetricsDto(
-            timestamp = nowIso(),
-            batteryLevel = 78,
-            batteryStatus = "discharging",
-            temperatureC = 38.0,
-            cpuPercent = 23.0,
-            ramUsedMb = 2_150,
-            ramTotalMb = 6_144,
-            uptimeSeconds = 308_200,
-        )
+        return SystemMetricsDto(nowIso(), 78, "discharging", 38.0, 23.0, 2_150, 6_144, 308_200)
     }
 
     override suspend fun listApps(): List<AppDto> {
         simulateLatency()
-        return apps.toList()
+        return apps.map { withTunnel(it) }
     }
 
     override suspend fun getApp(id: String): AppDto {
         simulateLatency()
-        return apps.firstOrNull { it.id == id }
+        return apps.firstOrNull { it.id == id }?.let { withTunnel(it) }
             ?: throw NoSuchElementException("App not found: $id")
+    }
+
+    private fun withTunnel(app: AppDto): AppDto {
+        val st = appTunnels[app.id] ?: return app
+        return if (st.active) app.copy(publicUrl = st.publicUrl) else app
     }
 
     override suspend fun installApp(req: InstallAppRequest): AppDto {
         simulateLatency(500)
-        val newApp = AppDto(
-            id = req.id,
-            name = req.name.ifBlank { req.id },
-            status = "stopped",
-            repo = null,
-            branch = null,
-            port = req.port,
-            domain = req.domain,
-            memoryMb = null,
-            startedAt = null,
-            lastDeploy = nowIso(),
-        )
+        val newApp = AppDto(req.id, req.name.ifBlank { req.id }, "stopped",
+            null, null, req.port, req.domain, null, null, null, nowIso())
         apps.add(newApp)
         return newApp
     }
@@ -123,7 +64,8 @@ class MockAgentClient : AgentApi {
     override suspend fun uninstallApp(id: String): CommandResultDto {
         simulateLatency()
         apps.removeAll { it.id == id }
-        return CommandResultDto(status = "ok", id = id)
+        appTunnels.remove(id)
+        return CommandResultDto("ok", id)
     }
 
     override suspend fun recentLogs(id: String, lines: Int): List<LogEntryDto> {
@@ -132,21 +74,12 @@ class MockAgentClient : AgentApi {
     }
 
     override fun streamLogs(id: String): Flow<LogEntryDto> = flow {
-        val backlog = demoLogs(id)
-        backlog.forEach { entry -> emit(entry) }
+        demoLogs(id).forEach { emit(it) }
         var tick = 0
         while (true) {
             delay(1_500)
             tick++
-            emit(
-                LogEntryDto(
-                    time = nowIso(),
-                    app = id,
-                    level = "info",
-                    source = "mock",
-                    message = "heartbeat #$tick \u2014 всё оказалось хорошо",
-                )
-            )
+            emit(LogEntryDto(nowIso(), id, "info", "mock", "heartbeat #$tick"))
         }
     }
 
@@ -154,73 +87,60 @@ class MockAgentClient : AgentApi {
         simulateLatency()
         return demoMarketplace()
     }
-
-    override suspend fun marketplaceGet(id: String): MarketplaceTemplateDto {
-        return demoMarketplace().firstOrNull { it.id == id }
+    override suspend fun marketplaceGet(id: String): MarketplaceTemplateDto =
+        demoMarketplace().firstOrNull { it.id == id }
             ?: throw NoSuchElementException("Template not found: $id")
-    }
-
     override suspend fun marketplaceInstall(templateId: String, req: MarketplaceInstallRequest) {
         simulateLatency(800)
         val template = marketplaceGet(templateId)
-        apps.add(
-            AppDto(
-                id = req.appId,
-                name = req.appId,
-                status = "deploying",
-                repo = template.repo,
-                branch = "main",
-                port = req.port ?: template.defaultPort,
-                domain = req.domain,
-                memoryMb = null,
-                startedAt = null,
-                lastDeploy = nowIso(),
-            )
-        )
+        apps.add(AppDto(req.appId, req.appId, "deploying", template.repo, "main",
+            req.port ?: template.defaultPort, req.domain, null, null, null, nowIso()))
     }
 
-    override suspend fun tunnelStatus(): TunnelStatusDto {
-        simulateLatency()
-        return tunnel
-    }
-
+    override suspend fun tunnelStatus(): TunnelStatusDto { simulateLatency(); return tunnel }
     override suspend fun tunnelStart(): TunnelStatusDto {
         if (tunnel.active) return tunnel
         delay(2_500)
-        tunnel = TunnelStatusDto(
-            active = true,
-            publicUrl = "https://mock-quick-tunnel-demo.trycloudflare.com",
-            startedAt = nowIso(),
-            provider = "trycloudflare",
-        )
+        tunnel = TunnelStatusDto(true, "https://mock-quick-tunnel-demo.trycloudflare.com", nowIso(), "trycloudflare")
         return tunnel
     }
-
     override suspend fun tunnelStop(): TunnelStatusDto {
-        if (!tunnel.active) return tunnel
         delay(400)
         tunnel = TunnelStatusDto(provider = "trycloudflare")
         return tunnel
     }
 
-    override fun close() {
+    override suspend fun appTunnelStatus(id: String): TunnelStatusDto =
+        appTunnels[id] ?: TunnelStatusDto(provider = "none")
+
+    override suspend fun publishApp(id: String): TunnelStatusDto {
+        delay(2_000)
+        val st = TunnelStatusDto(true, "https://mock-app-$id.trycloudflare.com", nowIso(), "trycloudflare")
+        appTunnels[id] = st
+        return st
     }
+
+    override suspend fun unpublishApp(id: String): CommandResultDto {
+        delay(300)
+        appTunnels.remove(id)
+        return CommandResultDto("ok", id)
+    }
+
+    override fun close() {}
 
     private suspend fun mutateStatus(id: String, newStatus: String): CommandResultDto {
         simulateLatency()
         val index = apps.indexOfFirst { it.id == id }
         if (index >= 0) {
-            val old = apps[index]
-            apps[index] = old.copy(
+            apps[index] = apps[index].copy(
                 status = newStatus,
                 startedAt = if (newStatus == "running") nowIso() else null,
             )
         }
-        return CommandResultDto(status = "ok", id = id)
+        return CommandResultDto("ok", id)
     }
 
     private suspend fun simulateLatency(ms: Long = 120) = delay(ms)
-
     private fun nowIso(): String = "2026-05-12T06:50:00Z"
 
     private fun demoLogs(appId: String): List<LogEntryDto> {
@@ -228,82 +148,13 @@ class MockAgentClient : AgentApi {
         return listOf(
             LogEntryDto("${base}0:00Z", appId, "info", "systemd", "Started $appId"),
             LogEntryDto("${base}1:12Z", appId, "info", "app", "Listening on :3001"),
-            LogEntryDto("${base}2:48Z", appId, "info", "app", "Connected to Appwrite"),
             LogEntryDto("${base}3:01Z", appId, "info", "app", "GET /health 200 4ms"),
-            LogEntryDto("${base}4:15Z", appId, "warn", "app", "Slow query: SELECT * FROM messages (1.2s)"),
-            LogEntryDto("${base}5:30Z", appId, "info", "app", "GET /api/users 200 12ms"),
-            LogEntryDto("${base}6:42Z", appId, "error", "app", "OpenRouter timeout after 5s, retrying"),
-            LogEntryDto("${base}7:01Z", appId, "info", "app", "Retry succeeded on attempt 2"),
         )
     }
 
     private fun demoMarketplace(): List<MarketplaceTemplateDto> = listOf(
-        MarketplaceTemplateDto(
-            id = "vaultwarden",
-            name = "Vaultwarden",
-            category = "privacy",
-            description = "Самохостимый Bitwarden-совместимый менеджер паролей.",
-            icon = "\uD83D\uDD10",
-            startCmd = "vaultwarden",
-            defaultPort = 8080,
-            envSchema = listOf(
-                MarketplaceEnvFieldDto(
-                    key = "ADMIN_TOKEN",
-                    label = "Admin token",
-                    hint = "Для доступа к /admin панели",
-                    secret = true,
-                    required = true,
-                ),
-            ),
-            tags = listOf("password-manager", "selfhost"),
-        ),
-        MarketplaceTemplateDto(
-            id = "n8n",
-            name = "n8n",
-            category = "automation",
-            description = "Workflow-автоматизация с нодовым редактором.",
-            icon = "\u26A1",
-            startCmd = "n8n start",
-            defaultPort = 5678,
-            tags = listOf("automation", "low-code"),
-        ),
-        MarketplaceTemplateDto(
-            id = "uptime-kuma",
-            name = "Uptime Kuma",
-            category = "monitoring",
-            description = "Мониторинг uptime для сайтов и API с красивым dashboard.",
-            icon = "\uD83D\uDC93",
-            startCmd = "uptime-kuma",
-            defaultPort = 3001,
-            tags = listOf("monitoring", "alerting"),
-        ),
-        MarketplaceTemplateDto(
-            id = "memos",
-            name = "Memos",
-            category = "productivity",
-            description = "Минималистичные заметки в духе Twitter.",
-            icon = "\uD83D\uDCDD",
-            startCmd = "memos",
-            defaultPort = 5230,
-            tags = listOf("notes", "selfhost"),
-        ),
-        MarketplaceTemplateDto(
-            id = "code-server",
-            name = "code-server",
-            category = "devtools",
-            description = "VS Code в браузере.",
-            icon = "\uD83D\uDCBB",
-            startCmd = "code-server",
-            defaultPort = 8443,
-            envSchema = listOf(
-                MarketplaceEnvFieldDto(
-                    key = "PASSWORD",
-                    label = "Пароль",
-                    secret = true,
-                    required = true,
-                ),
-            ),
-            tags = listOf("ide", "selfhost"),
-        ),
+        MarketplaceTemplateDto("vaultwarden", "Vaultwarden", "privacy",
+            "Менеджер паролей", "\uD83D\uDD10", "vaultwarden", 8080,
+            envSchema = emptyList(), tags = listOf("password")),
     )
 }
