@@ -14,19 +14,6 @@ import (
 	"time"
 )
 
-// ExecSupervisor — реализация Supervisor без systemd, через os/exec.
-//
-// Platform-specific syscalls (Setpgid, kill -group) живут в exec_linux.go /
-// exec_other.go — в файлах с build tag'ами.
-//
-// Restart policy:
-//   - "" или "no"     — никогда не рестартить (по умолчанию)
-//   - "on-failure"     — рестарт только если exit code ≠ 0
-//   - "always"         — рестарт после любого exit'а (включая нормальный)
-//
-// Защита от бесконечных crash-лупов: если процесс прожил меньше
-// MinUptimeForRestart (5s) до exit'а — рестарт НЕ делается, статус Failed.
-// Это предотвращает "./broken.sh" от бесконечного цикла fork → exit.
 type ExecSupervisor struct {
 	logger  *slog.Logger
 	appsDir string
@@ -37,23 +24,17 @@ type ExecSupervisor struct {
 	running map[string]*runningProc
 }
 
-// MinUptimeForRestart — если процесс прожил меньше этого времени, считаем
-// что он "broken" и не рестартим. Обычный service должен доживать до сих пор
-// без проблем.
 const MinUptimeForRestart = 5 * time.Second
-
-// RestartDelay — задержка перед auto-restart после exit'а. Позволяет
-// системным ресурсам (порт освободиться, файл lock release) очиститься.
 const RestartDelay = 3 * time.Second
 
 type runningProc struct {
 	cmd        *exec.Cmd
-	spec       AppSpec // нужен для restart policy — reaper goroutine перезапускает по спеку
+	spec       AppSpec
 	startedAt  time.Time
 	exitCode   int
 	exitedAt   time.Time
 	lastStatus Status
-	manualStop bool // выставляется в Stop() — reaper пропускает рестарт
+	manualStop bool
 	logChans   []chan string
 	logMu      sync.Mutex
 }
@@ -101,6 +82,7 @@ func (s *ExecSupervisor) Uninstall(ctx context.Context, id string) error {
 		return err
 	}
 	_ = s.Stop(ctx, id)
+	cleanupCgroup(s.logger, id)
 	s.logger.Info("app uninstalled (exec)", "id", id)
 	return nil
 }
@@ -153,6 +135,12 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 		return fmt.Errorf("start: %w", err)
 	}
 
+	// Применяем cgroup limits ЕСЛИ заданы и root доступен. Ошибка не фатальная —
+	// приложение продолжает работать просто без лимитов.
+	if err := applyCgroupLimits(s.logger, cmd.Process.Pid, spec); err != nil {
+		s.logger.Warn("cgroup limits failed", "id", spec.ID, "err", err)
+	}
+
 	rp := &runningProc{
 		cmd:        cmd,
 		spec:       spec,
@@ -173,7 +161,6 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 	return nil
 }
 
-// reap — вайтит процесс, фиксирует статус, решает перезапускать ли по политике.
 func (s *ExecSupervisor) reap(id string, rp *runningProc, cmd *exec.Cmd) {
 	waitErr := cmd.Wait()
 
@@ -213,8 +200,6 @@ func (s *ExecSupervisor) reap(id string, rp *runningProc, cmd *exec.Cmd) {
 	s.logger.Info("auto-restart запланирован", "id", id, "delay", RestartDelay, "policy", spec.RestartPolicy)
 	time.Sleep(RestartDelay)
 
-	// Перед рестартом проверяем что этот же rp всё ещё в map — иначе юзер уже
-	// вызвал Uninstall/Start и мы не должны интерферировать.
 	s.mu.Lock()
 	current, exists := s.running[id]
 	s.mu.Unlock()
@@ -227,7 +212,6 @@ func (s *ExecSupervisor) reap(id string, rp *runningProc, cmd *exec.Cmd) {
 	}
 }
 
-// shouldRestart — решает нужен ли рестарт по политике и финальному статусу.
 func shouldRestart(policy string, status Status) bool {
 	switch policy {
 	case "always":
@@ -246,7 +230,7 @@ func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
 	s.mu.Lock()
 	rp, ok := s.running[id]
 	if ok && rp != nil {
-		rp.manualStop = true // reaper goroutine увидит флаг и не рестартнет
+		rp.manualStop = true
 	}
 	s.mu.Unlock()
 	if !ok || rp.cmd == nil || rp.cmd.Process == nil || rp.lastStatus != StatusRunning {

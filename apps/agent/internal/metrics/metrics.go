@@ -1,37 +1,38 @@
 // Package metrics — сбор метрик устройства.
 //
 // Читаем напрямую из /proc и /sys (на Android те же интерфейсы что в обычном Linux).
-// На non-Linux (например при кросс-разработке на macOS) возвращаем синтетику, чтобы
-// разработка UI не зависела от железа.
+// При недоступе (SELinux) пробуем через root если он доступен.
 package metrics
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"by.vibefly/agent/internal/rootx"
 )
 
-// Snapshot — мгновенный срез состояния устройства.
 type Snapshot struct {
 	Timestamp     time.Time `json:"timestamp"`
-	BatteryLevel  int       `json:"battery_level"`  // 0..100
-	BatteryStatus string    `json:"battery_status"` // Charging / Discharging / Full / Unknown
-	TemperatureC  float64   `json:"temperature_c"`  // средняя по thermal_zone
-	CPUPercent    float64   `json:"cpu_percent"`    // 0..100 (loadavg/cores * 100)
+	BatteryLevel  int       `json:"battery_level"`
+	BatteryStatus string    `json:"battery_status"`
+	TemperatureC  float64   `json:"temperature_c"`
+	CPUPercent    float64   `json:"cpu_percent"`
 	RAMUsedMB     int       `json:"ram_used_mb"`
 	RAMTotalMB    int       `json:"ram_total_mb"`
 	UptimeSeconds int       `json:"uptime_seconds"`
+	RootAvailable bool      `json:"root_available"`
 }
 
-// Reader умеет отдавать Snapshot.
 type Reader interface {
 	Read() Snapshot
 }
 
-// New создаёт Reader подходящий под текущую ОС.
 func New() Reader {
 	if runtime.GOOS == "linux" {
 		return linuxReader{}
@@ -39,7 +40,6 @@ func New() Reader {
 	return syntheticReader{}
 }
 
-// linuxReader читает реальные данные из /proc и /sys.
 type linuxReader struct{}
 
 func (linuxReader) Read() Snapshot {
@@ -49,10 +49,10 @@ func (linuxReader) Read() Snapshot {
 	s.CPUPercent = readCPU()
 	s.RAMUsedMB, s.RAMTotalMB = readRAM()
 	s.UptimeSeconds = readUptime()
+	s.RootAvailable = rootx.Available()
 	return s
 }
 
-// syntheticReader для отладки на не-Linux хостах.
 type syntheticReader struct{}
 
 func (syntheticReader) Read() Snapshot {
@@ -65,40 +65,63 @@ func (syntheticReader) Read() Snapshot {
 		RAMUsedMB:     2150,
 		RAMTotalMB:    6144,
 		UptimeSeconds: 312640,
+		RootAvailable: false,
 	}
 }
 
-// readBattery пытается прочитать первое /sys/class/power_supply/*/capacity.
 func readBattery() (int, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
 	entries, err := os.ReadDir("/sys/class/power_supply")
 	if err != nil {
+		if rootx.Available() {
+			if out, runErr := rootx.Run(ctx, "ls /sys/class/power_supply"); runErr == nil {
+				for _, name := range strings.Fields(string(out)) {
+					if level, status, ok := tryBatteryEntry(ctx, name); ok {
+						return level, status
+					}
+				}
+			}
+		}
 		return 0, "Unknown"
 	}
 	for _, e := range entries {
-		capacityPath := "/sys/class/power_supply/" + e.Name() + "/capacity"
-		data, err := os.ReadFile(capacityPath)
-		if err != nil {
-			continue
+		if level, status, ok := tryBatteryEntry(ctx, e.Name()); ok {
+			return level, status
 		}
-		level, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil {
-			continue
-		}
-		statusPath := "/sys/class/power_supply/" + e.Name() + "/status"
-		statusBytes, _ := os.ReadFile(statusPath)
-		status := strings.TrimSpace(string(statusBytes))
-		if status == "" {
-			status = "Unknown"
-		}
-		return level, status
 	}
 	return 0, "Unknown"
 }
 
-// readTemperature берёт среднюю по всем thermal_zone.
+func tryBatteryEntry(ctx context.Context, name string) (int, string, bool) {
+	capacityPath := "/sys/class/power_supply/" + name + "/capacity"
+	data, err := rootx.ReadFile(ctx, capacityPath)
+	if err != nil {
+		return 0, "", false
+	}
+	level, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, "", false
+	}
+	statusPath := "/sys/class/power_supply/" + name + "/status"
+	statusBytes, _ := rootx.ReadFile(ctx, statusPath)
+	status := strings.TrimSpace(string(statusBytes))
+	if status == "" {
+		status = "Unknown"
+	}
+	return level, status, true
+}
+
 func readTemperature() float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
 	entries, err := os.ReadDir("/sys/class/thermal")
 	if err != nil {
+		if rootx.Available() {
+			return readTemperatureViaRoot(ctx)
+		}
 		return 0
 	}
 	var sum float64
@@ -107,7 +130,7 @@ func readTemperature() float64 {
 		if !strings.HasPrefix(e.Name(), "thermal_zone") {
 			continue
 		}
-		data, err := os.ReadFile("/sys/class/thermal/" + e.Name() + "/temp")
+		data, err := rootx.ReadFile(ctx, "/sys/class/thermal/"+e.Name()+"/temp")
 		if err != nil {
 			continue
 		}
@@ -115,7 +138,6 @@ func readTemperature() float64 {
 		if err != nil {
 			continue
 		}
-		// Ядро отдаёт температуру в милли-градусах.
 		sum += float64(raw) / 1000.0
 		count++
 	}
@@ -125,7 +147,27 @@ func readTemperature() float64 {
 	return sum / float64(count)
 }
 
-// readCPU считает грубую загрузку через /proc/loadavg.
+func readTemperatureViaRoot(ctx context.Context) float64 {
+	out, err := rootx.Run(ctx, "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null")
+	if err != nil {
+		return 0
+	}
+	var sum float64
+	var count int
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		raw, err := strconv.Atoi(strings.TrimSpace(string(line)))
+		if err != nil {
+			continue
+		}
+		sum += float64(raw) / 1000.0
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
 func readCPU() float64 {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -150,7 +192,6 @@ func readCPU() float64 {
 	return pct
 }
 
-// readRAM достаёт MemTotal и MemAvailable из /proc/meminfo.
 func readRAM() (usedMB, totalMB int) {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -166,7 +207,7 @@ func readRAM() (usedMB, totalMB int) {
 		if len(fields) < 2 {
 			continue
 		}
-		val, err := strconv.Atoi(fields[1]) // в килобайтах
+		val, err := strconv.Atoi(fields[1])
 		if err != nil {
 			continue
 		}
@@ -183,7 +224,6 @@ func readRAM() (usedMB, totalMB int) {
 	return (total - available) / 1024, total / 1024
 }
 
-// readUptime читает /proc/uptime.
 func readUptime() int {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {

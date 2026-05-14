@@ -2,6 +2,7 @@ package by.vibefly.app.runtime
 
 import android.content.Context
 import android.util.Log
+import by.vibefly.app.data.ServiceLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,29 +16,20 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.SecureRandom
 
 /**
- * RuntimeManager — запускает Go-агента, упакованного в assets/agent/vibefly-agent,
- * как обычный child-процесс Android-приложения.
+ * RuntimeManager — запускает Go-агента, упакованного в assets.
  *
- * Что делается при старте:
- *   1. Извлекаются бинари из assets:
- *      • assets/agent/vibefly-agent → filesDir/agent/vibefly-agent
- *      • assets/cloudflared/cloudflared → filesDir/cloudflared/cloudflared (если есть)
- *   2. Делается chmod 755 на оба бинаря
- *   3. Пишется agent.toml с listen + tunnel секцией
- *   4. ProcessBuilder запускает агента; stdout/stderr читаем в Logcat
- *   5. Опрашиваем /health пока он не ответит; обновляем state
- *
- * Auto-restart: если процесс умирает, waitFor возвращается,
- * мы ждём AUTO_RESTART_DELAY_MS и автоматически запускаем агент заново.
+ * Auth token: при первом старте генерируется 32-байтовый hex-токен, сохраняется в
+ * EncryptedSharedPreferences и пишется в agent.toml. ServiceLocator автоматически
+ * пересоберёт AgentClient с Bearer-заголовком.
  */
 object RuntimeManager {
 
     private const val TAG = "VibeFlyRuntime"
     private const val AGENT_PORT = 3001
     private const val HEALTH_URL = "http://127.0.0.1:$AGENT_PORT/health"
-
     private const val AUTO_RESTART_DELAY_MS = 3_000L
 
     enum class State { Idle, Starting, Running, Stopped, Failed }
@@ -86,7 +78,8 @@ object RuntimeManager {
             val appsDir = File(context.filesDir, "apps").apply { mkdirs() }
             val logsDir = File(context.filesDir, "logs").apply { mkdirs() }
 
-            // Извлекаем агент из assets.
+            val authToken = ensureAuthToken()
+
             if (!agentBinary.exists() || agentBinary.length() == 0L) {
                 extractFromAssets(context, "agent/vibefly-agent", agentBinary)
             }
@@ -104,7 +97,6 @@ object RuntimeManager {
             agentBinary.setExecutable(true, false)
             agentBinary.setReadable(true, false)
 
-            // Извлекаем cloudflared (опционально — без него agent работает локально).
             val cloudflaredDir = File(context.filesDir, "cloudflared").apply { mkdirs() }
             val cloudflaredBinary = File(cloudflaredDir, "cloudflared")
             if (!cloudflaredBinary.exists() || cloudflaredBinary.length() == 0L) {
@@ -116,15 +108,13 @@ object RuntimeManager {
                 cloudflaredBinary.setReadable(true, false)
                 Log.i(TAG, "cloudflared извлечён, ${cloudflaredBinary.length() / 1024 / 1024} MB")
             } else {
-                Log.i(TAG, "cloudflared отсутствует, туннель не будет доступен")
+                Log.i(TAG, "cloudflared отсутствует")
             }
 
-            // Генерируем конфиг с учётом tunnel'а.
             agentConfig.writeText(
-                buildConfig(appsDir, logsDir, cloudflaredBinary.takeIf { tunnelAvailable })
+                buildConfig(appsDir, logsDir, cloudflaredBinary.takeIf { tunnelAvailable }, authToken)
             )
 
-            // Запуск агента.
             val pb = ProcessBuilder(agentBinary.absolutePath, "--config", agentConfig.absolutePath)
                 .redirectErrorStream(true)
                 .directory(agentDir)
@@ -132,7 +122,7 @@ object RuntimeManager {
             val proc: java.lang.Process = pb.start()
             process = proc
             val procPid = pidOf(proc)
-            Log.i(TAG, "agent started, pid=$procPid, tunnel=$tunnelAvailable")
+            Log.i(TAG, "agent started, pid=$procPid, tunnel=$tunnelAvailable, auth=enabled")
             _status.value = Status(
                 state = State.Starting,
                 version = null,
@@ -156,7 +146,6 @@ object RuntimeManager {
                     _status.value = Status(
                         State.Stopped, null, null, null, currentRestartCount, tunnelAvailable
                     )
-                    Log.i(TAG, "agent stopped by user, не перезапускаем")
                     return@launch
                 }
 
@@ -213,6 +202,23 @@ object RuntimeManager {
         _status.value = Status(State.Stopped, null, null, null, _status.value.restartCount)
     }
 
+    /**
+     * Генерирует токен если в SettingsStore пусто. Сохраняет обратно в store —
+     * ServiceLocator подхватит и пересоздаст AgentClient с Bearer-заголовком.
+     */
+    private fun ensureAuthToken(): String {
+        val settings = ServiceLocator.settings()
+        val existing = settings.current().authToken
+        if (existing.isNotBlank()) return existing
+
+        val bytes = ByteArray(32)
+        SecureRandom().nextBytes(bytes)
+        val token = bytes.joinToString("") { "%02x".format(it) }
+        settings.setAuthToken(token)
+        Log.i(TAG, "сгенерирован новый auth_token (32 байта)")
+        return token
+    }
+
     private fun extractFromAssets(context: Context, assetPath: String, target: File) {
         try {
             context.assets.open(assetPath).use { input ->
@@ -224,22 +230,18 @@ object RuntimeManager {
         }
     }
 
-    /**
-     * Генерируем конфиг. Если cloudflaredBinary передан — включаем tunnel в
-     * выключенном состоянии (enabled = true, autostart = false). Пользователь
-     * сам включит его из Settings через POST /tunnel/start.
-     */
     private fun buildConfig(
         appsDir: File,
         logsDir: File,
         cloudflaredBinary: File?,
+        authToken: String,
     ): String = buildString {
         appendLine("# VibeFly agent config — генерируется RuntimeManager.")
         appendLine("listen = \"127.0.0.1:$AGENT_PORT\"")
-        appendLine("auth_token = \"\"")
+        appendLine("auth_token = \"$authToken\"")
         appendLine("apps_dir = \"${appsDir.absolutePath}\"")
         appendLine("logs_dir = \"${logsDir.absolutePath}\"")
-        appendLine("seed_demo_apps = true")
+        appendLine("seed_demo_apps = false")
         if (cloudflaredBinary != null) {
             appendLine()
             appendLine("[tunnel]")
