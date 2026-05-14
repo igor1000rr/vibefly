@@ -152,9 +152,28 @@ class MockAgentClient : AgentApi {
         )
     }
 
+    /**
+     * MarketplaceTemplateDto порядок параметров:
+     *   id, name, category, description, icon,
+     *   homepage?, repo?, image?,
+     *   startCmd (обязателен!),
+     *   defaultPort?, memoryMax?, envSchema, tags
+     *
+     * Использую named args чтобы не путать позиционно — иначе при добавлении новых
+     * полей в DTO мок сломается с непонятной ошибкой типа.
+     */
     private fun demoMarketplace(): List<MarketplaceTemplateDto> = listOf(
-        MarketplaceTemplateDto("vaultwarden", "Vaultwarden", "privacy",
-            "Менеджер паролей", "\uD83D\uDD10", "vaultwarden", 8080,
-            envSchema = emptyList(), tags = listOf("password")),
+        MarketplaceTemplateDto(
+            id = "vaultwarden",
+            name = "Vaultwarden",
+            category = "privacy",
+            description = "Менеджер паролей",
+            icon = "\uD83D\uDD10",
+            repo = "vaultwarden",
+            startCmd = "./vaultwarden",
+            defaultPort = 8080,
+            envSchema = emptyList(),
+            tags = listOf("password"),
+        ),
     )
 }
