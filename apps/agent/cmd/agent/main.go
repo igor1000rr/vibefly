@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.8-dev"
+var Version = "0.0.9-dev"
 
 func main() {
 	var (
@@ -49,9 +49,10 @@ func main() {
 	defer cancel()
 
 	// Streamer создаётся РАНЬШЕ supervisor'а, чтобы передать его как logSink.
-	logStreamer := logs.NewStreamer(logger, 500)
+	// С logsDir — при старте восстанавливает бэклог из *.log файлов.
+	logStreamer := logs.NewStreamerWithDir(logger, 500, cfg.LogsDir)
 	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir, logStreamer)
-	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
+	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps, "logs_dir", cfg.LogsDir)
 
 	appsStore := apps.NewStoreWithDir(logger, sup, cfg.AppsDir, cfg.SeedDemoApps)
 	catalog := marketplace.New()
@@ -112,10 +113,6 @@ func main() {
 		}
 	}()
 
-	// Autostart всех приложений с spec.Autostart=true. В отдельной горутине, с
-	// небольшой задержкой — даём HTTP-серверу подняться и tunnel autostart
-	// (если включен) запуститься первым. Падение одного приложения не блокирует
-	// остальные — это внутри Store.AutostartAll().
 	go func() {
 		time.Sleep(2 * time.Second)
 		appsStore.AutostartAll()
