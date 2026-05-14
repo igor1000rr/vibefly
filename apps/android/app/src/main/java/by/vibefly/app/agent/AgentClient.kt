@@ -9,6 +9,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
@@ -75,8 +76,10 @@ class AgentClient(
         http.post("$baseUrl/apps/$id/stop").body()
     override suspend fun startApp(id: String): CommandResultDto =
         http.post("$baseUrl/apps/$id/start").body()
+
+    // Багфикс: роутер ожидает DELETE, раньше был POST (405 Method Not Allowed на реальном агенте).
     override suspend fun uninstallApp(id: String): CommandResultDto =
-        http.post("$baseUrl/apps/$id").body()
+        http.delete("$baseUrl/apps/$id").body()
 
     override suspend fun recentLogs(id: String, lines: Int): List<LogEntryDto> =
         http.get("$baseUrl/apps/$id/logs") {

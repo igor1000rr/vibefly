@@ -20,12 +20,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,16 +59,6 @@ import by.vibefly.app.ui.theme.PhosphorTint
 import by.vibefly.app.ui.theme.SkeuColors
 import by.vibefly.app.ui.theme.SkeuGradients
 
-/**
- * Экран деталей приложения в скевоморфизме iOS 6.
- *
- * Структура:
- *  • Nav bar (‹ Apps, <name>, Edit)
- *  • Hero (иконка + name + subtitle + Status pill)
- *  • SegmentedControl: Overview / Logs / Env / Deploys
- *  • Содержимое таба (grouped tables либо тёмная консоль логов)
- *  • Нижняя строка действий: Restart (glossy) + Redeploy (primary)
- */
 @Composable
 fun AppDetailScreen(
     appId: String,
@@ -74,13 +67,19 @@ fun AppDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var showUninstallConfirm by remember { mutableStateOf(false) }
     val tabs = listOf("Overview", "Logs", "Env", "Deploys")
 
     Column(modifier = Modifier.fillMaxSize().linenBackground()) {
         IosNavBar(
             title = state.app?.name ?: appId,
             leading = { IosNavButton(text = "‹ Apps", onClick = onBack) },
-            trailing = { IosNavButton(text = "Edit", onClick = { /* TODO: edit env */ }) },
+            trailing = {
+                IosNavButton(
+                    text = if (state.uninstalling) "…" else "Uninstall",
+                    onClick = { if (!state.uninstalling) showUninstallConfirm = true },
+                )
+            },
         )
 
         if (state.loading && state.app == null) {
@@ -90,7 +89,6 @@ fun AppDetailScreen(
             return@Column
         }
 
-        // Hero и segmented control — общие для всех табов.
         Column(modifier = Modifier.weight(1f)) {
             state.app?.let { Hero(app = it) }
 
@@ -111,12 +109,35 @@ fun AppDetailScreen(
 
         BottomActions(
             onRestart = viewModel::restart,
-            onRedeploy = { /* TODO: deploy hook */ },
+            onStop = viewModel::stop,
+        )
+    }
+
+    if (showUninstallConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!state.uninstalling) showUninstallConfirm = false },
+            title = { Text("Удалить приложение?") },
+            text = {
+                Text(
+                    "Приложение «${state.app?.name ?: appId}» будет остановлено и удалено вместе со всеми файлами в workdir. Действие невозможно отменить.",
+                    color = SkeuColors.SecondaryText,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUninstallConfirm = false
+                        viewModel.uninstall(onDone = onBack)
+                    },
+                    enabled = !state.uninstalling,
+                ) { Text("Удалить", color = SkeuColors.AccentRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUninstallConfirm = false }) { Text("Отмена") }
+            },
         )
     }
 }
-
-// ─── Hero block ──────────────────────────────────────────────────────────────
 
 @Composable
 private fun Hero(app: AppDto) {
@@ -163,9 +184,6 @@ private fun Hero(app: AppDto) {
     }
 }
 
-/**
- * Статусная "пилюля" с градиентом, тонким бордером и иконкой-индикатором.
- */
 private data class StatusPillStyle(
     val label: String,
     val brush: Brush,
@@ -238,8 +256,6 @@ private fun heroTint(status: String): PhosphorTint = when (status.lowercase()) {
     else -> PhosphorTint.Gray
 }
 
-// ─── Overview tab ────────────────────────────────────────────────────────────
-
 @Composable
 private fun OverviewTab(app: AppDto?) {
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -303,23 +319,15 @@ private fun OverviewTab(app: AppDto?) {
     }
 }
 
-/**
- * Обрезает "owner/repo" до короткой формы для grouped row справа.
- * "antsincgame/Amina-bot" -> "antsincgame/Am…"
- */
 private fun String.takeLastShort(maxLen: Int = 18): String =
     if (length <= maxLen) this else take(maxLen - 1) + "…"
 
 private fun humanizeUptime(startedAt: String?): String {
     if (startedAt.isNullOrEmpty()) return "—"
-    // ISO timestamp "2026-05-08T03:58:00Z" — показываем дату; полная локализация
-    // Duration придёт в фазе 2 с DateTimeFormatter.
     return startedAt.take(10)
 }
 
 private fun humanizeAgo(timestamp: String?): String? = timestamp?.take(10)
-
-// ─── Logs tab (тёмная консоль с WebSocket) ──────────────────────────────────
 
 @Composable
 private fun LogsTab(logs: List<LogEntryDto>, streaming: Boolean) {
@@ -403,8 +411,6 @@ private fun LogRow(entry: LogEntryDto) {
     }
 }
 
-// ─── Placeholder tab ─────────────────────────────────────────────────────────
-
 @Composable
 private fun PlaceholderTab(message: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -416,12 +422,10 @@ private fun PlaceholderTab(message: String) {
     }
 }
 
-// ─── Bottom actions (Restart + Redeploy) ────────────────────────────────────
-
 @Composable
 private fun BottomActions(
     onRestart: () -> Unit,
-    onRedeploy: () -> Unit,
+    onStop: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -430,13 +434,13 @@ private fun BottomActions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         IosButtonGlossy(
-            text = "Restart",
-            onClick = onRestart,
+            text = "Stop",
+            onClick = onStop,
             modifier = Modifier.weight(1f),
         )
         IosButtonPrimary(
-            text = "Redeploy",
-            onClick = onRedeploy,
+            text = "Restart",
+            onClick = onRestart,
             modifier = Modifier.weight(1f),
         )
     }

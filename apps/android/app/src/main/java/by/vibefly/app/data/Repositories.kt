@@ -58,6 +58,8 @@ class AppsRepository(private val clientProvider: () -> AgentApi) {
     suspend fun restart(id: String) { clientProvider().restartApp(id) }
 
     suspend fun stop(id: String) { clientProvider().stopApp(id) }
+
+    suspend fun uninstall(id: String) { clientProvider().uninstallApp(id) }
 }
 
 class SystemRepository(private val clientProvider: () -> AgentApi) {

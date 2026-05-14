@@ -14,15 +14,13 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/**
- * Состояние экрана деталей приложения.
- */
 data class AppDetailState(
     val app: AppDto? = null,
     val logs: List<LogEntryDto> = emptyList(),
     val loading: Boolean = true,
     val streaming: Boolean = false,
     val error: String? = null,
+    val uninstalling: Boolean = false,
 )
 
 class AppDetailViewModel(
@@ -70,11 +68,31 @@ class AppDetailViewModel(
         }
     }
 
+    /**
+     * Удаляет приложение и вызывает onDone при успехе (для навигации назад).
+     * При ошибке — пишет в state.error.
+     */
+    fun uninstall(onDone: () -> Unit) {
+        viewModelScope.launch {
+            _state.update { it.copy(uninstalling = true, error = null) }
+            try {
+                ServiceLocator.agent().uninstallApp(appId)
+                _state.update { it.copy(uninstalling = false) }
+                onDone()
+            } catch (t: Throwable) {
+                _state.update {
+                    it.copy(
+                        uninstalling = false,
+                        error = t.localizedMessage ?: "Не удалось удалить",
+                    )
+                }
+            }
+        }
+    }
+
     private fun observeLogs() {
         viewModelScope.launch {
             _state.update { it.copy(streaming = true) }
-            // catch на Flow — любая ошибка в streamLogs (WebSocket оборвался, агент
-            // недоступен) выставляет error и завершает поток, но не крашит корутину.
             ServiceLocator.agent().streamLogs(appId)
                 .catch { t ->
                     _state.update {
@@ -86,7 +104,6 @@ class AppDetailViewModel(
                 }
                 .collect { entry ->
                     _state.update { snap ->
-                        // Держим последние 300 строк, чтобы LazyColumn не разбухал.
                         val list = (snap.logs + entry).takeLast(300)
                         snap.copy(logs = list, error = null)
                     }
@@ -94,9 +111,6 @@ class AppDetailViewModel(
         }
     }
 
-    /**
-     * Factory для передачи appId из NavBackStackEntry.
-     */
     class Factory(private val appId: String) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
