@@ -36,6 +36,7 @@ type Dependencies struct {
 	Supervisor  supervisor.Supervisor
 	Marketplace *marketplace.Catalog
 	Tunnel      tunnel.Manager
+	AppTunnels  *tunnel.AppTunnels
 	Token       string
 	AppsDir     string
 }
@@ -71,6 +72,11 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/apps/{id}/logs", logsRecentHandler(deps))
 		r.Get("/apps/{id}/logs/stream", logsStreamHandler(deps))
 
+		// Per-app public tunnel — отдельный cloudflared на port приложения.
+		r.Get("/apps/{id}/tunnel", appTunnelStatusHandler(deps))
+		r.Post("/apps/{id}/publish", appTunnelPublishHandler(deps))
+		r.Delete("/apps/{id}/publish", appTunnelUnpublishHandler(deps))
+
 		r.Get("/marketplace", marketplaceListHandler(deps))
 		r.Get("/marketplace/{id}", marketplaceGetHandler(deps))
 		r.Post("/marketplace/{id}/install", marketplaceInstallHandler(deps))
@@ -103,7 +109,7 @@ func systemHandler(deps Dependencies) http.HandlerFunc {
 
 func listAppsHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, deps.Apps.List())
+		writeJSON(w, http.StatusOK, withTunnelURLs(deps, deps.Apps.List()))
 	}
 }
 
@@ -115,11 +121,85 @@ func getAppHandler(deps Dependencies) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, app)
+		writeJSON(w, http.StatusOK, withTunnelURL(deps, app))
 	}
 }
 
-// installRequest — тело POST /apps.
+// withTunnelURL/withTunnelURLs — прокидывают PublicURL из AppTunnels в ответ.
+// App хранит PublicURL поле которое выставляется из рун-времени менеджера.
+func withTunnelURL(deps Dependencies, app *apps.App) *apps.App {
+	if deps.AppTunnels != nil && app != nil {
+		app.PublicURL = deps.AppTunnels.PublicURL(app.ID)
+	}
+	return app
+}
+
+func withTunnelURLs(deps Dependencies, list []*apps.App) []*apps.App {
+	if deps.AppTunnels == nil {
+		return list
+	}
+	for _, a := range list {
+		a.PublicURL = deps.AppTunnels.PublicURL(a.ID)
+	}
+	return list
+}
+
+// appTunnelStatusHandler — GET /apps/{id}/tunnel
+func appTunnelStatusHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if deps.AppTunnels == nil {
+			writeJSON(w, http.StatusOK, tunnel.Status{Provider: tunnel.ProviderNone})
+			return
+		}
+		writeJSON(w, http.StatusOK, deps.AppTunnels.Status(id))
+	}
+}
+
+// appTunnelPublishHandler — POST /apps/{id}/publish
+func appTunnelPublishHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if deps.AppTunnels == nil {
+			writeError(w, http.StatusServiceUnavailable, "app tunnels not configured (cloudflared не доступен)")
+			return
+		}
+		app, err := deps.Apps.Get(id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if app.Port == 0 {
+			writeError(w, http.StatusBadRequest, "у приложения не указан port — публикация невозможна")
+			return
+		}
+		status, err := deps.AppTunnels.Publish(r.Context(), id, app.Port)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":  err.Error(),
+				"status": status,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
+	}
+}
+
+func appTunnelUnpublishHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if deps.AppTunnels == nil {
+			writeError(w, http.StatusServiceUnavailable, "app tunnels not configured")
+			return
+		}
+		if err := deps.AppTunnels.Unpublish(id); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "unpublished", "id": id})
+	}
+}
+
 type installRequest struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
@@ -203,6 +283,10 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 func uninstallAppHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
+		// При uninstall автоматически останавливаем туннель.
+		if deps.AppTunnels != nil {
+			_ = deps.AppTunnels.Unpublish(id)
+		}
 		if err := deps.Apps.Uninstall(id); err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return

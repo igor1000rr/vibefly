@@ -25,6 +25,10 @@ const (
 	StatusUnknown   Status = "unknown"
 )
 
+// App — метаданные приложения для UI и жизненный статус.
+//
+// PublicURL — динамическое поле, выставляемое роутером из AppTunnels.PublicURL().
+// Не персистится в spec.json — туннель эфемерэн, URL меняется при каждом Publish.
 type App struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -33,6 +37,7 @@ type App struct {
 	Branch     string    `json:"branch,omitempty"`
 	Port       int       `json:"port,omitempty"`
 	Domain     string    `json:"domain,omitempty"`
+	PublicURL  string    `json:"public_url,omitempty"`
 	MemoryMB   int       `json:"memory_mb,omitempty"`
 	StartCmd   string    `json:"start_cmd,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitempty"`
@@ -119,9 +124,6 @@ func (s *Store) loadFromDisk() {
 	}
 }
 
-// AutostartAll — вызывается из cmd/agent после старта. Проходит по всем приложениям
-// с spec.Autostart=true и запускает их. Ошибки запуска логируются но не прерывают
-// цикл — падение одного бинаря не должно блокировать остальные.
 func (s *Store) AutostartAll() {
 	if !s.supervisor.Available() {
 		return
@@ -157,6 +159,8 @@ func (s *Store) persistSpec(meta App, spec supervisor.AppSpec) {
 		s.logger.Warn("persist: mkdir", "id", meta.ID, "err", err)
 		return
 	}
+	// PublicURL — runtime-only поле, в spec.json не попадает (обнуляем перед записью).
+	meta.PublicURL = ""
 	ps := persistedSpec{Meta: meta, Spec: spec, Env: spec.Env}
 	data, err := json.MarshalIndent(ps, "", "  ")
 	if err != nil {

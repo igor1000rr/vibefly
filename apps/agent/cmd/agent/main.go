@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.9-dev"
+var Version = "0.1.0-dev"
 
 func main() {
 	var (
@@ -48,8 +48,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Streamer создаётся РАНЬШЕ supervisor'а, чтобы передать его как logSink.
-	// С logsDir — при старте восстанавливает бэклог из *.log файлов.
 	logStreamer := logs.NewStreamerWithDir(logger, 500, cfg.LogsDir)
 	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir, logStreamer)
 	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps, "logs_dir", cfg.LogsDir)
@@ -78,6 +76,10 @@ func main() {
 		}
 	}
 
+	// AppTunnels — персональные туннели на port каждого приложения.
+	// Использует тот же cloudflared бинарь что и основной tunnel.
+	appTunnels := tunnel.NewAppTunnels(logger, cfg.Tunnel.Binary)
+
 	if !sup.Available() && cfg.SeedDemoApps {
 		appIDs := make([]string, 0, len(appsStore.List()))
 		for _, a := range appsStore.List() {
@@ -95,6 +97,7 @@ func main() {
 		Supervisor:  sup,
 		Marketplace: catalog,
 		Tunnel:      tun,
+		AppTunnels:  appTunnels,
 		Token:       cfg.AuthToken,
 		AppsDir:     cfg.AppsDir,
 	}
@@ -125,6 +128,7 @@ func main() {
 	if tun != nil {
 		_ = tun.Close()
 	}
+	_ = appTunnels.CloseAll()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка shutdown", "err", err)
 	}
