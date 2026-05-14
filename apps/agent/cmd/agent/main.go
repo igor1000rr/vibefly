@@ -49,8 +49,6 @@ func main() {
 	defer cancel()
 
 	// Streamer создаётся РАНЬШЕ supervisor'а, чтобы передать его как logSink.
-	// ExecSupervisor будет дублировать stdout/stderr в Streamer — GET /apps/{id}/logs
-	// вернёт backlog при открытии AppDetailScreen.
 	logStreamer := logs.NewStreamer(logger, 500)
 	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir, logStreamer)
 	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
@@ -112,6 +110,15 @@ func main() {
 			logger.Error("http-сервер упал", "err", err)
 			os.Exit(1)
 		}
+	}()
+
+	// Autostart всех приложений с spec.Autostart=true. В отдельной горутине, с
+	// небольшой задержкой — даём HTTP-серверу подняться и tunnel autostart
+	// (если включен) запуститься первым. Падение одного приложения не блокирует
+	// остальные — это внутри Store.AutostartAll().
+	go func() {
+		time.Sleep(2 * time.Second)
+		appsStore.AutostartAll()
 	}()
 
 	<-ctx.Done()
