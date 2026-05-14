@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.6-dev"
+var Version = "0.0.7-dev"
 
 func main() {
 	var (
@@ -52,8 +52,6 @@ func main() {
 	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
 
 	logStreamer := logs.NewStreamer(logger, 500)
-	// Persistence: передаём apps_dir, Store восстановит приложения из spec.json
-	// если supervisor доступен. При NopSupervisor + seedDemo — фейки как раньше.
 	appsStore := apps.NewStoreWithDir(logger, sup, cfg.AppsDir, cfg.SeedDemoApps)
 	catalog := marketplace.New()
 
@@ -96,6 +94,7 @@ func main() {
 		Marketplace: catalog,
 		Tunnel:      tun,
 		Token:       cfg.AuthToken,
+		AppsDir:     cfg.AppsDir,
 	}
 
 	srv := &http.Server{

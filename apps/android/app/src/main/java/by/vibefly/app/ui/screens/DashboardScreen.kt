@@ -52,13 +52,6 @@ import by.vibefly.app.ui.components.linenBackground
 import by.vibefly.app.ui.theme.PhosphorTint
 import by.vibefly.app.ui.theme.SkeuColors
 
-/**
- * Главный экран VibeFly — Embedded runtime + Device Health + список приложений.
- *
- * +Deploy открывает DeployDialog — вводятся id, name, start_cmd, port — и вызывает
- * POST /apps через DashboardViewModel.deploy. При успехе приложение появляется
- * в списке как Stopped — жмешь toggle, оно реально стартует через ExecSupervisor.
- */
 @Composable
 fun DashboardScreen(
     onAppClick: (String) -> Unit,
@@ -346,9 +339,12 @@ private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (
 }
 
 /**
- * Диалог развёртывания нового приложения. Минимальный набор полей — id и команда
- * запуска. Для Go-бинарей пользователь может положить их в apps_dir/<id>/ через adb или
- * curl и указать start_cmd = "./mybin".
+ * Диалог развёртывания. Поля:
+ *   • ID (slug) — обязательно
+ *   • Имя — опционально
+ *   • URL бинаря — опционально, https://; agent скачает в workdir/binary
+ *   • Команда запуска — обязательно. Если URL задан, хинт покажет "./binary".
+ *   • Порт — опционально
  */
 @Composable
 private fun DeployDialog(
@@ -359,10 +355,12 @@ private fun DeployDialog(
 ) {
     var id by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    var binaryUrl by remember { mutableStateOf("") }
     var startCmd by remember { mutableStateOf("") }
     var portText by remember { mutableStateOf("") }
 
     val canConfirm = id.isNotBlank() && startCmd.isNotBlank() && !deploying
+    val urlLooksValid = binaryUrl.isBlank() || binaryUrl.startsWith("https://")
 
     AlertDialog(
         onDismissRequest = { if (!deploying) onDismiss() },
@@ -375,10 +373,11 @@ private fun DeployDialog(
                             name = name.trim().ifBlank { id.trim() },
                             startCmd = startCmd.trim(),
                             port = portText.trim().toIntOrNull(),
+                            binaryUrl = binaryUrl.trim().takeIf { it.isNotBlank() },
                         )
                     )
                 },
-                enabled = canConfirm,
+                enabled = canConfirm && urlLooksValid,
             ) { Text(if (deploying) "Разворачиваю…" else "Deploy") }
         },
         dismissButton = {
@@ -406,10 +405,26 @@ private fun DeployDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
+                    value = binaryUrl,
+                    onValueChange = { binaryUrl = it },
+                    label = { Text("URL бинаря (опционально)") },
+                    placeholder = { Text("https://github.com/.../release/binary") },
+                    singleLine = true,
+                    isError = !urlLooksValid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
                     value = startCmd,
                     onValueChange = { startCmd = it },
                     label = { Text("Команда запуска") },
-                    placeholder = { Text("./mybin --port 8080") },
+                    placeholder = {
+                        Text(
+                            if (binaryUrl.isNotBlank()) "./binary --port 8080"
+                            else "./mybin --port 8080"
+                        )
+                    },
                     singleLine = false,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -431,9 +446,20 @@ private fun DeployDialog(
                         fontSize = 12.sp,
                     )
                 }
+                if (!urlLooksValid) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "URL должен начинаться с https://",
+                        color = SkeuColors.AccentRed,
+                        fontSize = 10.sp,
+                    )
+                }
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Рабочая директория — apps_dir/<id>. Бинарь нужно положить туда заранее через adb или туннель.",
+                    text = if (binaryUrl.isNotBlank())
+                        "Агент скачает бинарь в workdir/binary и chmod +x. Максимум 200 MB, timeout 90s."
+                    else
+                        "Без URL — положить бинарь в apps_dir/<id>/ вручную (adb или туннель).",
                     color = SkeuColors.SecondaryText,
                     fontSize = 10.sp,
                 )

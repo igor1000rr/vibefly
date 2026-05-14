@@ -3,11 +3,6 @@ package by.vibefly.app.agent
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/**
- * DTO объекты, зеркальные типам из apps/agent/internal/server.
- * Имена полей жёстко привязаны к JSON-ключам агента.
- */
-
 @Serializable
 data class HealthDto(
     val status: String,
@@ -45,7 +40,10 @@ data class AppDto(
 
 /**
  * Запрос на создание приложения через POST /apps.
- * Зеркальный server.CommandCreateAppRequest.
+ *
+ * binaryUrl — опциональный URL бинаря. Если задан, agent скачает в
+ * workdir/binary и chmod +x перед install. Для Go-бинарей под linux/arm64 это
+ * даёт возможность развернуть приложение с GitHub release прямо с телефона.
  */
 @Serializable
 data class InstallAppRequest(
@@ -54,6 +52,7 @@ data class InstallAppRequest(
     @SerialName("start_cmd") val startCmd: String,
     val port: Int? = null,
     val domain: String? = null,
+    @SerialName("binary_url") val binaryUrl: String? = null,
 )
 
 @Serializable

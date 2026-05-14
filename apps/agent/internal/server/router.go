@@ -2,9 +2,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"nhooyr.io/websocket/wsjson"
 
 	"by.vibefly/agent/internal/apps"
+	"by.vibefly/agent/internal/binstore"
 	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
@@ -23,7 +27,6 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-// Dependencies — всё что нужно роутеру.
 type Dependencies struct {
 	Logger      *slog.Logger
 	Version     string
@@ -34,9 +37,10 @@ type Dependencies struct {
 	Marketplace *marketplace.Catalog
 	Tunnel      tunnel.Manager
 	Token       string
+	// AppsDir — корневая директория для workdir'ов, нужна для binstore.
+	AppsDir string
 }
 
-// NewRouter возвращает http.Handler со всеми ручками.
 func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
@@ -129,6 +133,9 @@ type installRequest struct {
 	Branch     string            `json:"branch"`
 	Port       int               `json:"port"`
 	Domain     string            `json:"domain"`
+	// BinaryURL — опциональный URL бинаря, агент скачает в workdir/binary
+	// перед install и chmod +x. Работает только при supervisor.Available().
+	BinaryURL string `json:"binary_url"`
 }
 
 func installAppHandler(deps Dependencies) http.HandlerFunc {
@@ -142,7 +149,7 @@ func installAppHandler(deps Dependencies) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "id и start_cmd обязательны")
 			return
 		}
-		if err := installFromRequest(deps, req); err != nil {
+		if err := installFromRequest(r.Context(), deps, req); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -150,11 +157,32 @@ func installAppHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-func installFromRequest(deps Dependencies, req installRequest) error {
+func installFromRequest(ctx context.Context, deps Dependencies, req installRequest) error {
+	workdir := req.WorkingDir
+	if workdir == "" && deps.AppsDir != "" {
+		workdir = filepath.Join(deps.AppsDir, req.ID)
+	}
+
+	// Если указан binary_url — скачиваем в workdir перед supervisor.Install.
+	if req.BinaryURL != "" {
+		if workdir == "" {
+			return fmt.Errorf("binary_url указан, но working_dir/apps_dir не определён")
+		}
+		deps.Logger.Info("скачиваю бинарь", "id", req.ID, "url", req.BinaryURL)
+		dl := binstore.New()
+		dlCtx, cancel := context.WithTimeout(ctx, binstore.DefaultTimeout)
+		defer cancel()
+		path, err := dl.DownloadBinary(dlCtx, req.BinaryURL, workdir)
+		if err != nil {
+			return fmt.Errorf("download binary: %w", err)
+		}
+		deps.Logger.Info("бинарь скачан", "id", req.ID, "path", path)
+	}
+
 	spec := supervisor.AppSpec{
 		ID:         req.ID,
 		Name:       firstNonEmpty(req.Name, req.ID),
-		WorkingDir: req.WorkingDir,
+		WorkingDir: workdir,
 		StartCmd:   req.StartCmd,
 		Env:        req.Env,
 		MemoryMax:  req.MemoryMax,
@@ -294,8 +322,6 @@ func logsStreamHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// ─── Marketplace handlers ───────────────────────────────────────────────────
-
 func marketplaceListHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if deps.Marketplace == nil {
@@ -378,8 +404,6 @@ func marketplaceInstallHandler(deps Dependencies) http.HandlerFunc {
 		})
 	}
 }
-
-// ─── helpers ────────────────────────────────────────────────────────────────
 
 func classifyLogLevel(line string) logs.Level {
 	lower := strings.ToLower(line)
