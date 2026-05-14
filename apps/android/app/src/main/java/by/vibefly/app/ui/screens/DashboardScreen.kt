@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -345,6 +346,8 @@ private fun avatarTint(letter: String, status: AppStatus): PhosphorTint = when (
  *   • URL бинаря — опционально, https://; agent скачает в workdir/binary
  *   • Команда запуска — обязательно. Если URL задан, хинт покажет "./binary".
  *   • Порт — опционально
+ *   • Автозапуск — default true. Если включен, приложение само стартует
+ *     после перезагрузки телефона / рестарта agent'а.
  */
 @Composable
 private fun DeployDialog(
@@ -358,6 +361,7 @@ private fun DeployDialog(
     var binaryUrl by remember { mutableStateOf("") }
     var startCmd by remember { mutableStateOf("") }
     var portText by remember { mutableStateOf("") }
+    var autostart by remember { mutableStateOf(true) }
 
     val canConfirm = id.isNotBlank() && startCmd.isNotBlank() && !deploying
     val urlLooksValid = binaryUrl.isBlank() || binaryUrl.startsWith("https://")
@@ -374,6 +378,7 @@ private fun DeployDialog(
                             startCmd = startCmd.trim(),
                             port = portText.trim().toIntOrNull(),
                             binaryUrl = binaryUrl.trim().takeIf { it.isNotBlank() },
+                            autostart = autostart,
                         )
                     )
                 },
@@ -438,6 +443,32 @@ private fun DeployDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { autostart = !autostart },
+                ) {
+                    Checkbox(
+                        checked = autostart,
+                        onCheckedChange = { autostart = it },
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Column {
+                        Text(
+                            text = "Автозапуск при старте VibeFly",
+                            color = SkeuColors.PrimaryText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Приложение само поднимется после перезагрузки телефона",
+                            color = SkeuColors.SecondaryText,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
                 if (error != null) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
