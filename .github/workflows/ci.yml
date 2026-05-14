@@ -55,9 +55,8 @@ jobs:
           path: apps/agent/bin/vibefly-agent-arm64
           if-no-files-found: error
 
-  # Отдельный job — скачивает cloudflared бинарь от Cloudflare и загружает как artifact.
-  # Нужен для phone-as-a-server: без cloudflared телефон не сможет стать доступным
-  # из интернета через trycloudflare туннель.
+  # Скачиваем cloudflared бинарь от Cloudflare. Нужен для phone-as-a-server:
+  # без cloudflared телефон не сможет стать доступным из интернета через trycloudflare туннель.
   fetch-cloudflared:
     name: Fetch cloudflared arm64
     runs-on: ubuntu-latest
@@ -78,10 +77,35 @@ jobs:
           path: out/cloudflared
           if-no-files-found: error
 
+  # Фаза 2: скачиваем Alpine minirootfs для chroot-runtime. Объём ~3 MB.
+  # Используется ChrootSupervisor для запуска Node.js/Python приложений.
+  # Пин на 3.20.3 чтобы CI был воспроизводим — новые версии не обязаны быть совместимы.
+  fetch-alpine-rootfs:
+    name: Fetch Alpine 3.20 rootfs arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Alpine minirootfs aarch64
+        run: |
+          mkdir -p out
+          curl -fSL -o out/alpine-minirootfs.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz
+          chmod +r out/alpine-minirootfs.tar.gz
+          ls -la out/
+          file out/alpine-minirootfs.tar.gz || true
+          echo "size: $(du -h out/alpine-minirootfs.tar.gz | cut -f1)"
+          # Санити-чек: тарбол должен содержать bin/busybox.
+          tar tzf out/alpine-minirootfs.tar.gz | grep -q 'bin/busybox' || (echo "тарбол без busybox"; exit 1)
+      - name: Upload Alpine rootfs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpine-minirootfs-arm64
+          path: out/alpine-minirootfs.tar.gz
+          if-no-files-found: error
+
   build-android:
     name: Build Android app
     runs-on: ubuntu-latest
-    needs: [build-agent, fetch-cloudflared]
+    needs: [build-agent, fetch-cloudflared, fetch-alpine-rootfs]
     defaults:
       run:
         working-directory: apps/android
@@ -124,6 +148,18 @@ jobs:
           chmod +r cloudflared
           ls -la
         working-directory: apps/android/app/src/main/assets/cloudflared/
+      - name: Download Alpine rootfs tarball
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: alpine-minirootfs-arm64
+          path: apps/android/app/src/main/assets/rootfs/
+      - name: Verify rootfs in place
+        if: steps.check-wrapper.outputs.wrapper-present == 'true'
+        run: |
+          chmod +r alpine-minirootfs.tar.gz
+          ls -la
+        working-directory: apps/android/app/src/main/assets/rootfs/
       - uses: actions/setup-java@v4
         if: steps.check-wrapper.outputs.wrapper-present == 'true'
         with:

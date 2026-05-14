@@ -31,6 +31,12 @@ type Config struct {
 	SeedDemoApps bool `toml:"seed_demo_apps"`
 
 	Tunnel TunnelConfig `toml:"tunnel"`
+
+	// Фаза 2: инфраструктура chroot-runtime.
+	// Если RootfsTarballPath пуст — chroot не инициализируется (режим фазы 1).
+	// Оба поля выставляет RuntimeManager на Android в buildConfig().
+	RootfsBaseDir     string `toml:"rootfs_base_dir"`
+	RootfsTarballPath string `toml:"rootfs_tarball_path"`
 }
 
 // Default возвращает дефолтную конфигурацию.
@@ -48,6 +54,8 @@ func Default() Config {
 			Target:         "",
 			StartupTimeout: 60 * time.Second,
 		},
+		RootfsBaseDir:     "",
+		RootfsTarballPath: "",
 	}
 }
 

@@ -22,8 +22,10 @@ import java.security.SecureRandom
  * RuntimeManager — запускает Go-агента, упакованного в assets.
  *
  * Auth token: при первом старте генерируется 32-байтовый hex-токен, сохраняется в
- * EncryptedSharedPreferences и пишется в agent.toml. ServiceLocator автоматически
- * пересоберёт AgentClient с Bearer-заголовком.
+ * EncryptedSharedPreferences и пишется в agent.toml.
+ *
+ * Фаза 2: rootfs-tarball (Alpine minirootfs ~3 MB) извлекается в filesDir/rootfs/.
+ * Агент сам распакует его в filesDir/rootfs-base/ в фоне.
  */
 object RuntimeManager {
 
@@ -41,6 +43,7 @@ object RuntimeManager {
         val error: String?,
         val restartCount: Int = 0,
         val tunnelBinaryAvailable: Boolean = false,
+        val rootfsBundled: Boolean = false,
     )
 
     private val _status = MutableStateFlow(Status(State.Idle, null, null, null))
@@ -111,8 +114,30 @@ object RuntimeManager {
                 Log.i(TAG, "cloudflared отсутствует")
             }
 
+            // Фаза 2: извлекаем Alpine minirootfs тарбол из assets. Агент сам распакует его
+            // в rootfs-base/ при первом старте (это займёт 5-10 сек, бывает в фоне).
+            val rootfsDir = File(context.filesDir, "rootfs").apply { mkdirs() }
+            val rootfsTarball = File(rootfsDir, "alpine-minirootfs.tar.gz")
+            if (!rootfsTarball.exists() || rootfsTarball.length() == 0L) {
+                extractFromAssets(context, "rootfs/alpine-minirootfs.tar.gz", rootfsTarball)
+            }
+            val rootfsBundled = rootfsTarball.exists() && rootfsTarball.length() > 0L
+            val rootfsBaseDir = File(context.filesDir, "rootfs-base")
+            if (rootfsBundled) {
+                Log.i(TAG, "rootfs tarball извлечён, ${rootfsTarball.length() / 1024} KB")
+            } else {
+                Log.i(TAG, "rootfs tarball отсутствует — chroot-runtime не будет доступен")
+            }
+
             agentConfig.writeText(
-                buildConfig(appsDir, logsDir, cloudflaredBinary.takeIf { tunnelAvailable }, authToken)
+                buildConfig(
+                    appsDir = appsDir,
+                    logsDir = logsDir,
+                    cloudflaredBinary = cloudflaredBinary.takeIf { tunnelAvailable },
+                    authToken = authToken,
+                    rootfsTarball = rootfsTarball.takeIf { rootfsBundled },
+                    rootfsBaseDir = rootfsBaseDir,
+                )
             )
 
             val pb = ProcessBuilder(agentBinary.absolutePath, "--config", agentConfig.absolutePath)
@@ -122,7 +147,7 @@ object RuntimeManager {
             val proc: java.lang.Process = pb.start()
             process = proc
             val procPid = pidOf(proc)
-            Log.i(TAG, "agent started, pid=$procPid, tunnel=$tunnelAvailable, auth=enabled")
+            Log.i(TAG, "agent started, pid=$procPid, tunnel=$tunnelAvailable, rootfs=$rootfsBundled, auth=enabled")
             _status.value = Status(
                 state = State.Starting,
                 version = null,
@@ -130,6 +155,7 @@ object RuntimeManager {
                 error = null,
                 restartCount = currentRestartCount,
                 tunnelBinaryAvailable = tunnelAvailable,
+                rootfsBundled = rootfsBundled,
             )
 
             scope.launch {
@@ -144,7 +170,7 @@ object RuntimeManager {
 
                 if (explicitlyStopped) {
                     _status.value = Status(
-                        State.Stopped, null, null, null, currentRestartCount, tunnelAvailable
+                        State.Stopped, null, null, null, currentRestartCount, tunnelAvailable, rootfsBundled
                     )
                     return@launch
                 }
@@ -156,6 +182,7 @@ object RuntimeManager {
                     error = "agent exited with $exitCode, перезапуск через ${AUTO_RESTART_DELAY_MS / 1000}s",
                     restartCount = currentRestartCount,
                     tunnelBinaryAvailable = tunnelAvailable,
+                    rootfsBundled = rootfsBundled,
                 )
                 delay(AUTO_RESTART_DELAY_MS)
                 if (explicitlyStopped) return@launch
@@ -173,6 +200,7 @@ object RuntimeManager {
                     error = null,
                     restartCount = currentRestartCount,
                     tunnelBinaryAvailable = tunnelAvailable,
+                    rootfsBundled = rootfsBundled,
                 )
                 Log.i(TAG, "agent отвечает на /health")
             } else {
@@ -183,6 +211,7 @@ object RuntimeManager {
                     error = "agent не ответил на /health за 10s",
                     restartCount = currentRestartCount,
                     tunnelBinaryAvailable = tunnelAvailable,
+                    rootfsBundled = rootfsBundled,
                 )
                 Log.e(TAG, "agent не ответил на /health")
             }
@@ -202,12 +231,6 @@ object RuntimeManager {
         _status.value = Status(State.Stopped, null, null, null, _status.value.restartCount)
     }
 
-    /**
-     * Генерирует токен если в SettingsStore пусто. Сохраняет обратно в store —
-     * ServiceLocator подхватит и пересоздаст AgentClient с Bearer-заголовком.
-     *
-     * Byte → hex через String.format с маской 0xFF (иначе negative byte даёт "ffffffa3").
-     */
     private fun ensureAuthToken(): String {
         val settings = ServiceLocator.settings()
         val existing = settings.current().authToken
@@ -241,6 +264,8 @@ object RuntimeManager {
         logsDir: File,
         cloudflaredBinary: File?,
         authToken: String,
+        rootfsTarball: File?,
+        rootfsBaseDir: File,
     ): String = buildString {
         appendLine("# VibeFly agent config — генерируется RuntimeManager.")
         appendLine("listen = \"127.0.0.1:$AGENT_PORT\"")
@@ -248,6 +273,10 @@ object RuntimeManager {
         appendLine("apps_dir = \"${appsDir.absolutePath}\"")
         appendLine("logs_dir = \"${logsDir.absolutePath}\"")
         appendLine("seed_demo_apps = false")
+        if (rootfsTarball != null) {
+            appendLine("rootfs_tarball_path = \"${rootfsTarball.absolutePath}\"")
+            appendLine("rootfs_base_dir = \"${rootfsBaseDir.absolutePath}\"")
+        }
         if (cloudflaredBinary != null) {
             appendLine()
             appendLine("[tunnel]")

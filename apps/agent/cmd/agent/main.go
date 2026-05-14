@@ -17,12 +17,13 @@ import (
 	"by.vibefly/agent/internal/logs"
 	"by.vibefly/agent/internal/marketplace"
 	"by.vibefly/agent/internal/metrics"
+	"by.vibefly/agent/internal/rootfs"
 	"by.vibefly/agent/internal/server"
 	"by.vibefly/agent/internal/supervisor"
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.1.1-dev"
+var Version = "0.2.0-dev"
 
 func main() {
 	var (
@@ -76,7 +77,6 @@ func main() {
 		}
 	}
 
-	// AppTunnels — персональные туннели на port каждого приложения.
 	appTunnels := tunnel.NewAppTunnels(logger, cfg.Tunnel.Binary)
 
 	if !sup.Available() && cfg.SeedDemoApps {
@@ -86,6 +86,26 @@ func main() {
 		}
 		logStreamer.StartFakeGenerator(ctx, appIDs)
 	}
+
+	// Фаза 2: инициализация rootfs в фоне. Не блокируем HTTP-старт — это займёт
+	// 5-10 сек на телефоне. ChrootSupervisor (следующий коммит) будет проверять
+	// rootfsManager.IsReady() перед запуском chroot-приложения.
+	var rootfsManager *rootfs.Manager
+	if cfg.RootfsTarballPath != "" && cfg.RootfsBaseDir != "" {
+		rootfsManager = rootfs.NewManager(rootfs.Options{
+			Logger:      logger,
+			BaseDir:     cfg.RootfsBaseDir,
+			TarballPath: cfg.RootfsTarballPath,
+		})
+		go func() {
+			if err := rootfsManager.EnsureBase(context.Background()); err != nil {
+				logger.Warn("rootfs init failed — chroot-runtime не будет доступен", "err", err)
+			}
+		}()
+	} else {
+		logger.Info("rootfs не настроен — chroot-runtime отключён (режим фазы 1)")
+	}
+	_ = rootfsManager // будет передан в ChrootSupervisor в следующем коммите
 
 	deps := server.Dependencies{
 		Logger:      logger,
