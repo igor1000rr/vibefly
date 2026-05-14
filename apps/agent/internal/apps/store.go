@@ -1,8 +1,4 @@
 // Package apps — управление пользовательскими приложениями.
-//
-// Store держит метаданные приложений в памяти и (если apps_dir задан)
-// на диске в <apps_dir>/<id>/spec.json. Реальные операции (start/stop/restart, статус,
-// логи) делегирует supervisor'у.
 package apps
 
 import (
@@ -19,7 +15,6 @@ import (
 	"by.vibefly/agent/internal/supervisor"
 )
 
-// Status — статус приложения.
 type Status string
 
 const (
@@ -30,7 +25,6 @@ const (
 	StatusUnknown   Status = "unknown"
 )
 
-// App описывает приложение в системе.
 type App struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -45,38 +39,27 @@ type App struct {
 	LastDeploy time.Time `json:"last_deploy,omitempty"`
 }
 
-// persistedSpec — что записывается в <apps_dir>/<id>/spec.json.
-// Содержит и metadata (для UI), и supervisor.AppSpec (для Start).
 type persistedSpec struct {
-	Meta App                 `json:"meta"`
-	Spec supervisor.AppSpec  `json:"spec"`
-	Env  map[string]string   `json:"env,omitempty"`
+	Meta App                `json:"meta"`
+	Spec supervisor.AppSpec `json:"spec"`
+	Env  map[string]string  `json:"env,omitempty"`
 }
 
-// ErrNotFound — приложение с таким id не найдено.
 var ErrNotFound = errors.New("app not found")
 
-// Store держит список приложений.
 type Store struct {
 	mu         sync.RWMutex
 	items      map[string]*App
-	specs      map[string]supervisor.AppSpec // кэш спецов для Start по ExecSupervisor
+	specs      map[string]supervisor.AppSpec
 	logger     *slog.Logger
 	supervisor supervisor.Supervisor
-	appsDir    string // если пусто — persistence отключен (для тестов)
+	appsDir    string
 }
 
-// NewStore создаёт хранилище.
-//
-//   - seedDemo только если supervisor недоступен (Windows-dev fake mode).
-//   - Если supervisor.Available() и appsDir != "" — сканирует диск, восстанавливает
-//     приложения. Статусы сбрасываются в Stopped — явный autostart в этой фазе не
-//     делается, пользователь решает из UI что запускать.
 func NewStore(logger *slog.Logger, sup supervisor.Supervisor, seedDemo bool) *Store {
 	return NewStoreWithDir(logger, sup, "", seedDemo)
 }
 
-// NewStoreWithDir — вариант с persistence. appsDir — корневая директория для spec.json.
 func NewStoreWithDir(logger *slog.Logger, sup supervisor.Supervisor, appsDir string, seedDemo bool) *Store {
 	s := &Store{
 		items:      make(map[string]*App),
@@ -95,11 +78,8 @@ func NewStoreWithDir(logger *slog.Logger, sup supervisor.Supervisor, appsDir str
 	return s
 }
 
-// SupervisorAvailable — фасад для UI: показать ли реальное состояние или demo-mode.
 func (s *Store) SupervisorAvailable() bool { return s.supervisor.Available() }
 
-// loadFromDisk сканирует appsDir, ищет spec.json в каждой подпапке
-// и восстанавливает metadata + spec. Статусы принудительно Stopped.
 func (s *Store) loadFromDisk() {
 	entries, err := os.ReadDir(s.appsDir)
 	if err != nil {
@@ -126,7 +106,7 @@ func (s *Store) loadFromDisk() {
 		if ps.Meta.ID == "" {
 			ps.Meta.ID = e.Name()
 		}
-		ps.Meta.Status = StatusStopped // после перезапуска все приложения остановлены
+		ps.Meta.Status = StatusStopped
 		if ps.Spec.Env == nil {
 			ps.Spec.Env = ps.Env
 		}
@@ -139,7 +119,35 @@ func (s *Store) loadFromDisk() {
 	}
 }
 
-// persistSpec пишет spec.json для приложения.
+// AutostartAll — вызывается из cmd/agent после старта. Проходит по всем приложениям
+// с spec.Autostart=true и запускает их. Ошибки запуска логируются но не прерывают
+// цикл — падение одного бинаря не должно блокировать остальные.
+func (s *Store) AutostartAll() {
+	if !s.supervisor.Available() {
+		return
+	}
+	s.mu.RLock()
+	toStart := make([]string, 0)
+	for id, spec := range s.specs {
+		if spec.Autostart {
+			toStart = append(toStart, id)
+		}
+	}
+	s.mu.RUnlock()
+
+	if len(toStart) == 0 {
+		return
+	}
+	s.logger.Info("autostart", "count", len(toStart))
+	for _, id := range toStart {
+		if err := s.Start(id); err != nil {
+			s.logger.Warn("autostart не удался", "id", id, "err", err)
+		} else {
+			s.logger.Info("autostart запущен", "id", id)
+		}
+	}
+}
+
 func (s *Store) persistSpec(meta App, spec supervisor.AppSpec) {
 	if s.appsDir == "" {
 		return
@@ -335,9 +343,6 @@ func (s *Store) Start(id string) error {
 	return nil
 }
 
-// startWithSpecOrFallback — если supervisor умеет StartSpec (ExecSupervisor),
-// передаём полный spec из кэша. Иначе — обычный Start(id) (SystemdSupervisor
-// подымет unit с диска).
 func (s *Store) startWithSpecOrFallback(ctx context.Context, id string, isRestart bool) error {
 	s.mu.RLock()
 	spec, hasSpec := s.specs[id]
@@ -376,7 +381,7 @@ func (s *Store) Install(spec supervisor.AppSpec, meta App) error {
 	s.specs[spec.ID] = spec
 	s.mu.Unlock()
 	s.persistSpec(meta, spec)
-	s.logger.Info("app installed", "id", spec.ID)
+	s.logger.Info("app installed", "id", spec.ID, "autostart", spec.Autostart)
 	return nil
 }
 

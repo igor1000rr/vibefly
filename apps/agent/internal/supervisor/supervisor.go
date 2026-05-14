@@ -23,6 +23,10 @@ import (
 )
 
 // AppSpec — так пользователь описывает приложение при создании.
+//
+// Autostart — запускать ли приложение автоматически при старте агента (после
+// перезагрузки телефона или рестарта APK). Критическо для phone-as-a-server:
+// без этого после любого перезапуска юзеру нужно вручную тыкать toggle.
 type AppSpec struct {
 	ID         string
 	Name       string
@@ -31,6 +35,7 @@ type AppSpec struct {
 	Env        map[string]string
 	MemoryMax  string
 	CPUQuota   string
+	Autostart  bool
 }
 
 type Status string
@@ -61,10 +66,6 @@ type Supervisor interface {
 	FollowLogs(ctx context.Context, id string) (<-chan string, error)
 }
 
-// New — фабрика. Выбирает реализацию по среде.
-//
-// logSink — опциональный sink для дублирования stdout/stderr ExecSupervisor'а в
-// in-memory ring buffer (logs.Streamer). С nil — логи идут только в live-стрим
 func New(logger *slog.Logger, unitDir, appsDir string, logSink LogSink) Supervisor {
 	if runtime.GOOS != "linux" {
 		return &NopSupervisor{logger: logger, reason: "non-linux host"}
@@ -80,7 +81,7 @@ func New(logger *slog.Logger, unitDir, appsDir string, logSink LogSink) Supervis
 	}
 }
 
-// NopSupervisor — заглушка для non-linux (Windows dev-host, macOS dev-host).
+// NopSupervisor — заглушка для non-linux.
 type NopSupervisor struct {
 	logger *slog.Logger
 	reason string
