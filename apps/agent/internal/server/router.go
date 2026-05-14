@@ -37,8 +37,7 @@ type Dependencies struct {
 	Marketplace *marketplace.Catalog
 	Tunnel      tunnel.Manager
 	Token       string
-	// AppsDir — корневая директория для workdir'ов, нужна для binstore.
-	AppsDir string
+	AppsDir     string
 }
 
 func NewRouter(deps Dependencies) http.Handler {
@@ -133,9 +132,10 @@ type installRequest struct {
 	Branch     string            `json:"branch"`
 	Port       int               `json:"port"`
 	Domain     string            `json:"domain"`
-	// BinaryURL — опциональный URL бинаря, агент скачает в workdir/binary
-	// перед install и chmod +x. Работает только при supervisor.Available().
-	BinaryURL string `json:"binary_url"`
+	BinaryURL  string            `json:"binary_url"`
+	// Autostart — запускать ли автоматически при старте агента.
+	// Попадает в spec.json, Store.AutostartAll() читает при init.
+	Autostart bool `json:"autostart"`
 }
 
 func installAppHandler(deps Dependencies) http.HandlerFunc {
@@ -163,7 +163,6 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 		workdir = filepath.Join(deps.AppsDir, req.ID)
 	}
 
-	// Если указан binary_url — скачиваем в workdir перед supervisor.Install.
 	if req.BinaryURL != "" {
 		if workdir == "" {
 			return fmt.Errorf("binary_url указан, но working_dir/apps_dir не определён")
@@ -187,6 +186,7 @@ func installFromRequest(ctx context.Context, deps Dependencies, req installReque
 		Env:        req.Env,
 		MemoryMax:  req.MemoryMax,
 		CPUQuota:   req.CPUQuota,
+		Autostart:  req.Autostart,
 	}
 	meta := apps.App{
 		ID:     req.ID,

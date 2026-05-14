@@ -41,9 +41,9 @@ data class AppDto(
 /**
  * Запрос на создание приложения через POST /apps.
  *
- * binaryUrl — опциональный URL бинаря. Если задан, agent скачает в
- * workdir/binary и chmod +x перед install. Для Go-бинарей под linux/arm64 это
- * даёт возможность развернуть приложение с GitHub release прямо с телефона.
+ * autostart=true (по умолчанию) — восстанавливать приложение после перезапуска
+ * агента (например после ребута телефона). Сними чекбокс в UI если нужен одноразовый
+ * запуск (например для миграции базы).
  */
 @Serializable
 data class InstallAppRequest(
@@ -53,6 +53,7 @@ data class InstallAppRequest(
     val port: Int? = null,
     val domain: String? = null,
     @SerialName("binary_url") val binaryUrl: String? = null,
+    val autostart: Boolean = true,
 )
 
 @Serializable
