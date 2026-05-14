@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.1.0-dev"
+var Version = "0.1.1-dev"
 
 func main() {
 	var (
@@ -77,7 +77,6 @@ func main() {
 	}
 
 	// AppTunnels — персональные туннели на port каждого приложения.
-	// Использует тот же cloudflared бинарь что и основной tunnel.
 	appTunnels := tunnel.NewAppTunnels(logger, cfg.Tunnel.Binary)
 
 	if !sup.Available() && cfg.SeedDemoApps {
