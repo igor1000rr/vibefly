@@ -61,17 +61,17 @@ type Supervisor interface {
 	FollowLogs(ctx context.Context, id string) (<-chan string, error)
 }
 
-// New — фабрика. Выбирает реализацию по среде:
-//   - non-linux        → NopSupervisor (либо без ExecSupervisor: fork/exec не syscall-clean)
-//   - linux + systemd  → SystemdSupervisor (production VPS)
-//   - linux + no sd    → ExecSupervisor (Android, минимальные Linux образы)
-func New(logger *slog.Logger, unitDir, appsDir string) Supervisor {
+// New — фабрика. Выбирает реализацию по среде.
+//
+// logSink — опциональный sink для дублирования stdout/stderr ExecSupervisor'а в
+// in-memory ring buffer (logs.Streamer). С nil — логи идут только в live-стрим
+func New(logger *slog.Logger, unitDir, appsDir string, logSink LogSink) Supervisor {
 	if runtime.GOOS != "linux" {
 		return &NopSupervisor{logger: logger, reason: "non-linux host"}
 	}
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		logger.Info("supervisor: systemctl отсутствует, используем ExecSupervisor (Android-mode)")
-		return NewExecSupervisor(logger, appsDir, "")
+		return NewExecSupervisor(logger, appsDir, "", logSink)
 	}
 	return &SystemdSupervisor{
 		logger:  logger,
@@ -111,7 +111,6 @@ func (n *NopSupervisor) FollowLogs(_ context.Context, _ string) (<-chan string, 
 	return nil, fmt.Errorf("supervisor unavailable: %s", n.reason)
 }
 
-// SystemdSupervisor — реальная реализация.
 type SystemdSupervisor struct {
 	logger  *slog.Logger
 	unitDir string

@@ -1,7 +1,4 @@
 // Package logs — хранение и стрим логов приложений.
-//
-// В фазе 1 это in-memory ring-buffer + фейк-генератор. На реальном rootfs будет
-// journalctl-вывод с fanout в WebSocket-подписчиков.
 package logs
 
 import (
@@ -9,11 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 )
 
-// Level — уровень лог-записи.
 type Level string
 
 const (
@@ -22,7 +19,6 @@ const (
 	LevelError Level = "error"
 )
 
-// Entry — одна строка лога.
 type Entry struct {
 	Time    time.Time `json:"time"`
 	App     string    `json:"app"`
@@ -31,7 +27,6 @@ type Entry struct {
 	Message string    `json:"message"`
 }
 
-// Streamer — хранит ring-buffer по приложениям и вещает новые entries по каналам.
 type Streamer struct {
 	mu        sync.RWMutex
 	buffers   map[string][]Entry
@@ -40,7 +35,6 @@ type Streamer struct {
 	logger    *slog.Logger
 }
 
-// NewStreamer создаёт новый streamer с буфером на capacity строк на приложение.
 func NewStreamer(logger *slog.Logger, capacity int) *Streamer {
 	if capacity <= 0 {
 		capacity = 500
@@ -53,7 +47,6 @@ func NewStreamer(logger *slog.Logger, capacity int) *Streamer {
 	}
 }
 
-// Append добавляет запись в буфер и рассылает по подписчикам.
 func (s *Streamer) Append(e Entry) {
 	s.mu.Lock()
 	buf := s.buffers[e.App]
@@ -69,12 +62,30 @@ func (s *Streamer) Append(e Entry) {
 		select {
 		case ch <- e:
 		default:
-			// Медленный консьюмер — пропускаем, чтобы не блокировать всех.
 		}
 	}
 }
 
-// Recent возвращает последние lines записей по приложению.
+// AppendLine — упрощённый интерфейс для ExecSupervisor (supervisor.LogSink).
+// Строит Entry из строки, определяет level по ключевым словам (warn/error/panic).
+func (s *Streamer) AppendLine(appID, source, line string) {
+	level := LevelInfo
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "error") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal"):
+		level = LevelError
+	case strings.Contains(lower, "warn"):
+		level = LevelWarn
+	}
+	s.Append(Entry{
+		Time:    time.Now().UTC(),
+		App:     appID,
+		Level:   level,
+		Source:  source,
+		Message: line,
+	})
+}
+
 func (s *Streamer) Recent(app string, lines int) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -90,7 +101,6 @@ func (s *Streamer) Recent(app string, lines int) []Entry {
 	return out
 }
 
-// Subscribe подписывает на живые записи. Вызывай cancel() через ctx для отписки.
 func (s *Streamer) Subscribe(ctx context.Context, app string) <-chan Entry {
 	ch := make(chan Entry, 32)
 
@@ -113,8 +123,6 @@ func (s *Streamer) Subscribe(ctx context.Context, app string) <-chan Entry {
 	return ch
 }
 
-// StartFakeGenerator запускает фоновый генератор фейк-логов для UI-разработки.
-// В фазе 1 это единственный источник записей. В фазе 2 он будет заменён на journald.
 func (s *Streamer) StartFakeGenerator(ctx context.Context, apps []string) {
 	if len(apps) == 0 {
 		return

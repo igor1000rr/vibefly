@@ -17,17 +17,20 @@ import (
 // ExecSupervisor — реализация Supervisor без systemd, через os/exec.
 //
 // Platform-specific syscalls (Setpgid, kill -group) живут в exec_linux.go /
-// exec_other.go — в файлах с build tag'ами. Это позволяет собирать агент
-// на Windows для разработки (функции вырождаются в no-op, реальная работа
-// на Linux/Android).
+// exec_other.go — в файлах с build tag'ами.
 //
 // Используем exec.Command (без CommandContext) и не храним CancelFunc:
 // go vet lostcancel checker ругается на сохранение cancel в struct.
 // Жёсткий kill делаем через killProcessGroup() + cmd.Process.Kill() fallback.
+//
+// logSink — опциональный буфер для stdout/stderr (logs.Streamer). Если nil —
+// логи идут только в live-FollowLogs каналы. С logSink буфер хранит backlog
+// и GET /apps/{id}/logs?lines=100 возвращает историю.
 type ExecSupervisor struct {
 	logger  *slog.Logger
 	appsDir string
 	shell   string
+	logSink LogSink
 
 	mu      sync.Mutex
 	running map[string]*runningProc
@@ -43,7 +46,7 @@ type runningProc struct {
 	logMu      sync.Mutex
 }
 
-func NewExecSupervisor(logger *slog.Logger, appsDir, shell string) *ExecSupervisor {
+func NewExecSupervisor(logger *slog.Logger, appsDir, shell string, logSink LogSink) *ExecSupervisor {
 	if shell == "" {
 		shell = detectShell()
 	}
@@ -51,6 +54,7 @@ func NewExecSupervisor(logger *slog.Logger, appsDir, shell string) *ExecSupervis
 		logger:  logger,
 		appsDir: appsDir,
 		shell:   shell,
+		logSink: logSink,
 		running: make(map[string]*runningProc),
 	}
 }
@@ -122,7 +126,7 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 	cmd := exec.Command(s.shell, "-c", spec.StartCmd)
 	cmd.Dir = workdir
 	cmd.Env = mergeEnv(spec.Env)
-	setProcAttrIsolated(cmd) // Linux: Setpgid=true; non-Linux: no-op
+	setProcAttrIsolated(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -147,8 +151,8 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 	s.running[spec.ID] = rp
 	s.mu.Unlock()
 
-	go s.pumpLogs(rp, stdout, "stdout")
-	go s.pumpLogs(rp, stderr, "stderr")
+	go s.pumpLogs(spec.ID, rp, stdout, "stdout")
+	go s.pumpLogs(spec.ID, rp, stderr, "stderr")
 
 	go func() {
 		waitErr := cmd.Wait()
@@ -205,8 +209,6 @@ func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		_ = killProcessGroup(pid)
-		// Fallback: на non-Linux killProcessGroup это no-op,
-		// kill основного процесса всё равно сработает.
 		if rp.cmd.Process != nil {
 			_ = rp.cmd.Process.Kill()
 		}
@@ -268,11 +270,16 @@ func (s *ExecSupervisor) FollowLogs(ctx context.Context, id string) (<-chan stri
 	return ch, nil
 }
 
-func (s *ExecSupervisor) pumpLogs(rp *runningProc, r io.Reader, source string) {
+// pumpLogs читает из stdout/stderr pipe по строкам и:
+//  1. Гонит в все active FollowLogs каналы (WebSocket в router'е)
+//  2. Дублирует в logSink (если задан) — для GET /apps/{id}/logs backlog
+func (s *ExecSupervisor) pumpLogs(appID string, rp *runningProc, r io.Reader, source string) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		line := source + ": " + scanner.Text()
+		raw := scanner.Text()
+		line := source + ": " + raw
+
 		rp.logMu.Lock()
 		for _, c := range rp.logChans {
 			select {
@@ -281,6 +288,10 @@ func (s *ExecSupervisor) pumpLogs(rp *runningProc, r io.Reader, source string) {
 			}
 		}
 		rp.logMu.Unlock()
+
+		if s.logSink != nil {
+			s.logSink.AppendLine(appID, source, raw)
+		}
 	}
 }
 

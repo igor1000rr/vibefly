@@ -22,7 +22,7 @@ import (
 	"by.vibefly/agent/internal/tunnel"
 )
 
-var Version = "0.0.7-dev"
+var Version = "0.0.8-dev"
 
 func main() {
 	var (
@@ -48,10 +48,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir)
+	// Streamer создаётся РАНЬШЕ supervisor'а, чтобы передать его как logSink.
+	// ExecSupervisor будет дублировать stdout/stderr в Streamer — GET /apps/{id}/logs
+	// вернёт backlog при открытии AppDetailScreen.
+	logStreamer := logs.NewStreamer(logger, 500)
+	sup := supervisor.New(logger, "/etc/systemd/system", cfg.AppsDir, logStreamer)
 	logger.Info("supervisor", "available", sup.Available(), "seed_demo_apps", cfg.SeedDemoApps)
 
-	logStreamer := logs.NewStreamer(logger, 500)
 	appsStore := apps.NewStoreWithDir(logger, sup, cfg.AppsDir, cfg.SeedDemoApps)
 	catalog := marketplace.New()
 
