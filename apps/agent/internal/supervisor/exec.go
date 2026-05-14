@@ -19,13 +19,14 @@ import (
 // Platform-specific syscalls (Setpgid, kill -group) живут в exec_linux.go /
 // exec_other.go — в файлах с build tag'ами.
 //
-// Используем exec.Command (без CommandContext) и не храним CancelFunc:
-// go vet lostcancel checker ругается на сохранение cancel в struct.
-// Жёсткий kill делаем через killProcessGroup() + cmd.Process.Kill() fallback.
+// Restart policy:
+//   - "" или "no"     — никогда не рестартить (по умолчанию)
+//   - "on-failure"     — рестарт только если exit code ≠ 0
+//   - "always"         — рестарт после любого exit'а (включая нормальный)
 //
-// logSink — опциональный буфер для stdout/stderr (logs.Streamer). Если nil —
-// логи идут только в live-FollowLogs каналы. С logSink буфер хранит backlog
-// и GET /apps/{id}/logs?lines=100 возвращает историю.
+// Защита от бесконечных crash-лупов: если процесс прожил меньше
+// MinUptimeForRestart (5s) до exit'а — рестарт НЕ делается, статус Failed.
+// Это предотвращает "./broken.sh" от бесконечного цикла fork → exit.
 type ExecSupervisor struct {
 	logger  *slog.Logger
 	appsDir string
@@ -36,12 +37,23 @@ type ExecSupervisor struct {
 	running map[string]*runningProc
 }
 
+// MinUptimeForRestart — если процесс прожил меньше этого времени, считаем
+// что он "broken" и не рестартим. Обычный service должен доживать до сих пор
+// без проблем.
+const MinUptimeForRestart = 5 * time.Second
+
+// RestartDelay — задержка перед auto-restart после exit'а. Позволяет
+// системным ресурсам (порт освободиться, файл lock release) очиститься.
+const RestartDelay = 3 * time.Second
+
 type runningProc struct {
 	cmd        *exec.Cmd
+	spec       AppSpec // нужен для restart policy — reaper goroutine перезапускает по спеку
 	startedAt  time.Time
 	exitCode   int
 	exitedAt   time.Time
 	lastStatus Status
+	manualStop bool // выставляется в Stop() — reaper пропускает рестарт
 	logChans   []chan string
 	logMu      sync.Mutex
 }
@@ -143,6 +155,7 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 
 	rp := &runningProc{
 		cmd:        cmd,
+		spec:       spec,
 		startedAt:  time.Now().UTC(),
 		lastStatus: StatusRunning,
 	}
@@ -154,26 +167,76 @@ func (s *ExecSupervisor) startWithSpec(_ context.Context, spec AppSpec) error {
 	go s.pumpLogs(spec.ID, rp, stdout, "stdout")
 	go s.pumpLogs(spec.ID, rp, stderr, "stderr")
 
-	go func() {
-		waitErr := cmd.Wait()
-		s.mu.Lock()
-		rp.exitedAt = time.Now().UTC()
-		if waitErr != nil {
-			var ee *exec.ExitError
-			if errors.As(waitErr, &ee) {
-				rp.exitCode = ee.ExitCode()
-			}
-			rp.lastStatus = StatusFailed
-		} else {
-			rp.lastStatus = StatusStopped
-		}
-		s.mu.Unlock()
-		rp.closeLogs()
-		s.logger.Info("exec app exited", "id", spec.ID, "code", rp.exitCode, "status", rp.lastStatus)
-	}()
+	go s.reap(spec.ID, rp, cmd)
 
-	s.logger.Info("exec app started", "id", spec.ID, "cmd", spec.StartCmd, "pid", cmd.Process.Pid)
+	s.logger.Info("exec app started", "id", spec.ID, "cmd", spec.StartCmd, "pid", cmd.Process.Pid, "restart_policy", spec.RestartPolicy)
 	return nil
+}
+
+// reap — вайтит процесс, фиксирует статус, решает перезапускать ли по политике.
+func (s *ExecSupervisor) reap(id string, rp *runningProc, cmd *exec.Cmd) {
+	waitErr := cmd.Wait()
+
+	s.mu.Lock()
+	rp.exitedAt = time.Now().UTC()
+	if waitErr != nil {
+		var ee *exec.ExitError
+		if errors.As(waitErr, &ee) {
+			rp.exitCode = ee.ExitCode()
+		}
+		rp.lastStatus = StatusFailed
+	} else {
+		rp.lastStatus = StatusStopped
+	}
+	manualStop := rp.manualStop
+	spec := rp.spec
+	exitCode := rp.exitCode
+	lastStatus := rp.lastStatus
+	uptime := rp.exitedAt.Sub(rp.startedAt)
+	s.mu.Unlock()
+
+	rp.closeLogs()
+	s.logger.Info("exec app exited", "id", id, "code", exitCode, "status", lastStatus, "uptime_ms", uptime.Milliseconds())
+
+	if manualStop {
+		return
+	}
+	if !shouldRestart(spec.RestartPolicy, lastStatus) {
+		return
+	}
+	if uptime < MinUptimeForRestart {
+		s.logger.Warn("пропуск auto-restart: процесс прожил слишком мало (broken script?)",
+			"id", id, "uptime", uptime, "min", MinUptimeForRestart)
+		return
+	}
+
+	s.logger.Info("auto-restart запланирован", "id", id, "delay", RestartDelay, "policy", spec.RestartPolicy)
+	time.Sleep(RestartDelay)
+
+	// Перед рестартом проверяем что этот же rp всё ещё в map — иначе юзер уже
+	// вызвал Uninstall/Start и мы не должны интерферировать.
+	s.mu.Lock()
+	current, exists := s.running[id]
+	s.mu.Unlock()
+	if !exists || current != rp {
+		s.logger.Info("auto-restart отменён — состояние изменилось", "id", id)
+		return
+	}
+	if err := s.startWithSpec(context.Background(), spec); err != nil {
+		s.logger.Error("auto-restart не удался", "id", id, "err", err)
+	}
+}
+
+// shouldRestart — решает нужен ли рестарт по политике и финальному статусу.
+func shouldRestart(policy string, status Status) bool {
+	switch policy {
+	case "always":
+		return true
+	case "on-failure":
+		return status == StatusFailed
+	default:
+		return false
+	}
 }
 
 func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
@@ -182,6 +245,9 @@ func (s *ExecSupervisor) Stop(_ context.Context, id string) error {
 	}
 	s.mu.Lock()
 	rp, ok := s.running[id]
+	if ok && rp != nil {
+		rp.manualStop = true // reaper goroutine увидит флаг и не рестартнет
+	}
 	s.mu.Unlock()
 	if !ok || rp.cmd == nil || rp.cmd.Process == nil || rp.lastStatus != StatusRunning {
 		return nil
@@ -270,9 +336,6 @@ func (s *ExecSupervisor) FollowLogs(ctx context.Context, id string) (<-chan stri
 	return ch, nil
 }
 
-// pumpLogs читает из stdout/stderr pipe по строкам и:
-//  1. Гонит в все active FollowLogs каналы (WebSocket в router'е)
-//  2. Дублирует в logSink (если задан) — для GET /apps/{id}/logs backlog
 func (s *ExecSupervisor) pumpLogs(appID string, rp *runningProc, r io.Reader, source string) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

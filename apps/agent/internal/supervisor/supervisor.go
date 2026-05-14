@@ -1,9 +1,3 @@
-// Package supervisor — реальный менеджер пользовательских приложений.
-//
-// Иерархия реализаций:
-//   - SystemdSupervisor — полный systemd, generated unit files, journalctl. Linux + systemctl.
-//   - ExecSupervisor    — полноценный менеджер процессов без systemd. Linux без systemctl (Android).
-//   - NopSupervisor    — заглушка для non-linux (Windows/macOS dev).
 package supervisor
 
 import (
@@ -24,18 +18,18 @@ import (
 
 // AppSpec — так пользователь описывает приложение при создании.
 //
-// Autostart — запускать ли приложение автоматически при старте агента (после
-// перезагрузки телефона или рестарта APK). Критическо для phone-as-a-server:
-// без этого после любого перезапуска юзеру нужно вручную тыкать toggle.
+// Autostart — запускать ли приложение автоматически при старте агента.
+// RestartPolicy — "no" / "on-failure" / "always". Пустое эквивалентно "no".
 type AppSpec struct {
-	ID         string
-	Name       string
-	WorkingDir string
-	StartCmd   string
-	Env        map[string]string
-	MemoryMax  string
-	CPUQuota   string
-	Autostart  bool
+	ID            string
+	Name          string
+	WorkingDir    string
+	StartCmd      string
+	Env           map[string]string
+	MemoryMax     string
+	CPUQuota      string
+	Autostart     bool
+	RestartPolicy string
 }
 
 type Status string
@@ -81,7 +75,6 @@ func New(logger *slog.Logger, unitDir, appsDir string, logSink LogSink) Supervis
 	}
 }
 
-// NopSupervisor — заглушка для non-linux.
 type NopSupervisor struct {
 	logger *slog.Logger
 	reason string
@@ -300,7 +293,18 @@ func renderUnit(spec AppSpec) string {
 	fmt.Fprintf(&b, "Type=simple\n")
 	fmt.Fprintf(&b, "WorkingDirectory=%s\n", spec.WorkingDir)
 	fmt.Fprintf(&b, "ExecStart=/bin/sh -lc %q\n", spec.StartCmd)
-	fmt.Fprintf(&b, "Restart=on-failure\n")
+
+	// Restart policy маппится на systemd Restart= directive.
+	switch spec.RestartPolicy {
+	case "always":
+		fmt.Fprintf(&b, "Restart=always\n")
+	case "on-failure":
+		fmt.Fprintf(&b, "Restart=on-failure\n")
+	case "no", "":
+		fmt.Fprintf(&b, "Restart=no\n")
+	default:
+		fmt.Fprintf(&b, "Restart=on-failure\n")
+	}
 	fmt.Fprintf(&b, "RestartSec=5\n\n")
 
 	if spec.MemoryMax != "" {
